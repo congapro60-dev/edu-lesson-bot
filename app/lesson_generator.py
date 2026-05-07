@@ -11,6 +11,7 @@ from docx.shared import Pt
 
 from app.config import BASE_DIR, load_settings, require_values
 from app.drive_client import GoogleDriveClient
+from app.math_docx import add_math_aware_paragraph
 from app.moet_parser import MoetWeekPlan, extract_moet_week
 from app.ppct_parser import TDS_EXCEL_PATH, TDSWeekPlan, extract_tds_week
 from app.telegram_notify import build_notifier
@@ -23,7 +24,12 @@ LESSON_SYSTEM_PROMPT = """Bạn là chuyên gia xây dựng kế hoạch dạy h
 Hãy viết bằng tiếng Việt, giọng chuyên môn, rõ ràng, có cấu trúc giống giáo án mẫu.
 Mỗi giáo án phải bám nội dung PPCT, tuân thủ quy trình: Trải nghiệm - Hình thành kiến thức/kĩ năng - Rèn luyện, phát triển - Sơ kết.
 Ưu tiên câu hỏi định hướng, nhiệm vụ học sinh, sản phẩm học tập, phương án đánh giá và phân hóa học sinh.
-Không bịa tên tài liệu hoặc đường dẫn. Nếu thiếu dữ liệu, hãy viết phần phù hợp ở mức khung triển khai có thể chỉnh sửa."""
+Không bịa tên tài liệu hoặc đường dẫn. Nếu thiếu dữ liệu, hãy viết phần phù hợp ở mức khung triển khai có thể chỉnh sửa.
+Khi có công thức Toán, bắt buộc viết bằng LaTeX chuẩn để hệ thống chuyển thành Word Equation:
+- Công thức trong dòng đặt trong \\( ... \\), ví dụ \\(x^2-2x+1=0\\).
+- Công thức riêng dòng đặt trong \\[ ... \\], ví dụ \\[\\Delta=b^2-4ac\\].
+- Dùng lệnh LaTeX phổ biến như \\frac{a}{b}, \\sqrt{x}, x^{2}, a_{n}, \\sin x, \\cos x, \\vec{u}.
+- Không viết công thức bằng ảnh, không dùng ký hiệu Unicode rời rạc nếu có thể viết bằng LaTeX."""
 
 
 def tds_grade_output_folder_id(grade: int) -> str:
@@ -187,17 +193,26 @@ def add_multiline_paragraph(document: Document, text: str) -> None:
         if not stripped:
             continue
         if stripped.startswith("#"):
-            document.add_heading(stripped.lstrip("#").strip(), level=2)
+            paragraph = document.add_heading(stripped.lstrip("#").strip(), level=2)
         elif stripped[0:2].isdigit() and stripped[2:3] == ".":
-            document.add_heading(stripped, level=2)
+            paragraph = document.add_heading("", level=2)
+            add_math_aware_paragraph(paragraph, stripped)
         elif stripped.startswith("-"):
-            document.add_paragraph(stripped[1:].strip(), style="List Bullet")
+            paragraph = document.add_paragraph(style="List Bullet")
+            add_math_aware_paragraph(paragraph, stripped[1:].strip())
         else:
-            document.add_paragraph(stripped)
+            paragraph = document.add_paragraph()
+            add_math_aware_paragraph(paragraph, stripped)
 
 
 def set_cell_text(cell, text: str) -> None:
-    cell.text = text
+    cell.text = ""
+    lines = text.splitlines() or [""]
+    first_paragraph = cell.paragraphs[0]
+    add_math_aware_paragraph(first_paragraph, lines[0])
+    for line in lines[1:]:
+        paragraph = cell.add_paragraph()
+        add_math_aware_paragraph(paragraph, line)
     for paragraph in cell.paragraphs:
         for run in paragraph.runs:
             run.font.name = "Times New Roman"
