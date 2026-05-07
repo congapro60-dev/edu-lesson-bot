@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import os
 from pathlib import Path
 from typing import Any
 
@@ -22,9 +23,20 @@ class GoogleDriveClient:
         self.settings = load_settings()
         self.service = build("drive", "v3", credentials=self._load_credentials())
 
+    def _materialize_secret_file(self, path: Path, env_name: str) -> None:
+        if path.exists():
+            return
+        value = os.getenv(env_name, "").strip()
+        if not value:
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(value, encoding="utf-8")
+
     def _load_credentials(self) -> Credentials:
         token_file = self.settings.google_token_file
         credentials_file = self.settings.google_credentials_file
+        self._materialize_secret_file(credentials_file, "GOOGLE_CREDENTIALS_JSON")
+        self._materialize_secret_file(token_file, "GOOGLE_TOKEN_JSON")
         creds: Credentials | None = None
 
         if token_file.exists():
