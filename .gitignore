@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+credentials/*.json
+outputs/**/*.docx
+outputs/**/*.pdf
+outputs/**/*.xlsx
+outputs/**/*.xls
+outputs/**/*.tmp
