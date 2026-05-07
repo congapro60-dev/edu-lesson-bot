@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 from pathlib import Path
 
 from app.drive_audit import PROGRAM_LABELS, audit_all_range, collect_missing_weeks, find_week_folder
@@ -13,11 +14,20 @@ from app.config import BASE_DIR, load_settings, require_values
 from app.drive_client import GoogleDriveClient
 from app.math_docx import add_math_aware_paragraph
 from app.moet_parser import MoetWeekPlan, extract_moet_week
+from app.pdf_renderer import render_pdf
 from app.ppct_parser import TDS_EXCEL_PATH, TDSWeekPlan, extract_tds_week
 from app.telegram_notify import build_notifier
 
 
 GENERATED_DIR = BASE_DIR / "outputs" / "generated"
+DOCX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+PDF_MIME_TYPE = "application/pdf"
+
+
+@dataclass(frozen=True)
+class GeneratedLessonFiles:
+    docx_path: Path
+    pdf_path: Path | None = None
 
 
 LESSON_SYSTEM_PROMPT = """Bạn là chuyên gia xây dựng kế hoạch dạy học môn Toán THPT theo mẫu của Ban Toán TDS.
@@ -341,62 +351,69 @@ def get_existing_or_create_week_folder(client: GoogleDriveClient, parent_id: str
     return client.get_or_create_child_folder(parent_id, f"Tuần {week}")
 
 
-def generate_tds_docx(grade: int, week: int, track: str, upload: bool = False, notify: bool = False) -> Path:
+def upload_generated_files(files: GeneratedLessonFiles, parent_id: str, week: int) -> dict[str, str]:
+    client = GoogleDriveClient()
+    week_folder = get_existing_or_create_week_folder(client, parent_id, week)
+    links: dict[str, str] = {}
+
+    uploaded_docx = client.upload_file(files.docx_path, week_folder["id"], DOCX_MIME_TYPE)
+    links["docx"] = uploaded_docx.get("webViewLink", "")
+    print(f"Uploaded DOCX: {uploaded_docx.get('name')} | {uploaded_docx.get('id')} | {links['docx']}")
+
+    if files.pdf_path:
+        uploaded_pdf = client.upload_file(files.pdf_path, week_folder["id"], PDF_MIME_TYPE)
+        links["pdf"] = uploaded_pdf.get("webViewLink", "")
+        print(f"Uploaded PDF: {uploaded_pdf.get('name')} | {uploaded_pdf.get('id')} | {links['pdf']}")
+
+    return links
+
+
+def generate_tds_docx(grade: int, week: int, track: str, upload: bool = False, notify: bool = False) -> GeneratedLessonFiles:
     plan = extract_tds_week(TDS_EXCEL_PATH, grade, week, track)
     lesson_text = generate_lesson_text(plan, "TDS")
-    output_path = build_docx(plan, lesson_text, "TDS")
-    print(f"Generated DOCX: {output_path}")
+    docx_path = build_docx(plan, lesson_text, "TDS")
+    pdf_path = render_pdf(plan, lesson_text, "TDS")
+    files = GeneratedLessonFiles(docx_path=docx_path, pdf_path=pdf_path)
+    print(f"Generated DOCX: {docx_path}")
+    print(f"Generated PDF: {pdf_path}")
 
-    uploaded_link = ""
+    uploaded_links: dict[str, str] = {}
     if upload:
-        parent_id = tds_grade_output_folder_id(grade)
-        client = GoogleDriveClient()
-        week_folder = get_existing_or_create_week_folder(client, parent_id, week)
-        uploaded = client.upload_file(
-            output_path,
-            week_folder["id"],
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        )
-        uploaded_link = uploaded.get("webViewLink", "")
-        print(f"Uploaded DOCX: {uploaded.get('name')} | {uploaded.get('id')} | {uploaded_link}")
+        uploaded_links = upload_generated_files(files, tds_grade_output_folder_id(grade), week)
 
     if notify:
-        message = f"Đã tạo giáo án nháp TDS G{grade} tuần {week:02d}: {output_path.name}"
-        if uploaded_link:
-            message += f"\n{uploaded_link}"
+        message = f"Đã tạo giáo án nháp TDS G{grade} tuần {week:02d}: {docx_path.name} và {pdf_path.name}"
+        for label, link in uploaded_links.items():
+            if link:
+                message += f"\n{label.upper()}: {link}"
         build_notifier().send_message(message)
         print("Telegram notification sent.")
 
-    return output_path
+    return files
 
 
-def generate_moet_docx(grade: int, week: int, upload: bool = False, notify: bool = False) -> Path:
+def generate_moet_docx(grade: int, week: int, upload: bool = False, notify: bool = False) -> GeneratedLessonFiles:
     plan = extract_moet_week(grade, week)
     lesson_text = generate_lesson_text(plan, "MOET")
-    output_path = build_docx(plan, lesson_text, "MOET")
-    print(f"Generated DOCX: {output_path}")
+    docx_path = build_docx(plan, lesson_text, "MOET")
+    pdf_path = render_pdf(plan, lesson_text, "MOET")
+    files = GeneratedLessonFiles(docx_path=docx_path, pdf_path=pdf_path)
+    print(f"Generated DOCX: {docx_path}")
+    print(f"Generated PDF: {pdf_path}")
 
-    uploaded_link = ""
+    uploaded_links: dict[str, str] = {}
     if upload:
-        parent_id = moet_grade_output_folder_id(grade)
-        client = GoogleDriveClient()
-        week_folder = get_existing_or_create_week_folder(client, parent_id, week)
-        uploaded = client.upload_file(
-            output_path,
-            week_folder["id"],
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        )
-        uploaded_link = uploaded.get("webViewLink", "")
-        print(f"Uploaded DOCX: {uploaded.get('name')} | {uploaded.get('id')} | {uploaded_link}")
+        uploaded_links = upload_generated_files(files, moet_grade_output_folder_id(grade), week)
 
     if notify:
-        message = f"Đã tạo giáo án nháp MOET G{grade} tuần {week:02d}: {output_path.name}"
-        if uploaded_link:
-            message += f"\n{uploaded_link}"
+        message = f"Đã tạo giáo án nháp MOET G{grade} tuần {week:02d}: {docx_path.name} và {pdf_path.name}"
+        for label, link in uploaded_links.items():
+            if link:
+                message += f"\n{label.upper()}: {link}"
         build_notifier().send_message(message)
         print("Telegram notification sent.")
 
-    return output_path
+    return files
 
 
 def selected_programs(include_tds: bool, include_moet: bool) -> list[str]:

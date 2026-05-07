@@ -10,7 +10,7 @@ import requests
 from app.config import load_settings, require_values
 from app.drive_audit import WeekAudit, audit_week, format_week_audit
 from app.drive_client import GoogleDriveClient
-from app.lesson_generator import generate_moet_docx, generate_tds_docx
+from app.lesson_generator import GeneratedLessonFiles, generate_moet_docx, generate_tds_docx
 from app.telegram_notify import build_notifier
 
 
@@ -199,22 +199,29 @@ def find_uploaded_file_link(audit: WeekAudit, filename: str) -> str:
     return ""
 
 
-def format_generation_result(command: BotCommand, local_filename: str) -> str:
+def format_generation_result(command: BotCommand, generated_files: GeneratedLessonFiles) -> str:
     audit = audit_week(command.program, command.grade, command.week)
     folder_link = audit_folder_link(audit)
-    file_link = find_uploaded_file_link(audit, local_filename)
+    docx_link = find_uploaded_file_link(audit, generated_files.docx_path.name)
+    pdf_link = find_uploaded_file_link(audit, generated_files.pdf_path.name) if generated_files.pdf_path else ""
 
     lines = [
         f"Đã soạn và upload giáo án {command.program.upper()} G{command.grade} tuần {command.week:02d}.",
-        f"File local: {local_filename}",
-        f"Thư mục chứa file: {audit.folder_name or 'Chưa xác định'}",
+        f"File DOCX local: {generated_files.docx_path.name}",
     ]
+    if generated_files.pdf_path:
+        lines.append(f"File PDF local: {generated_files.pdf_path.name}")
+    lines.append(f"Thư mục chứa file: {audit.folder_name or 'Chưa xác định'}")
     if folder_link:
         lines.append(f"Link thư mục: {folder_link}")
-    if file_link:
-        lines.append(f"Link giáo án vừa tạo: {file_link}")
+    if docx_link:
+        lines.append(f"Link DOCX: {docx_link}")
     else:
-        lines.append("Link giáo án vừa tạo: chưa tìm thấy trong lần kiểm tra lại Drive; hãy mở thư mục tuần ở trên để kiểm tra file vừa upload.")
+        lines.append("Link DOCX: chưa tìm thấy trong lần kiểm tra lại Drive; hãy mở thư mục tuần ở trên để kiểm tra file vừa upload.")
+    if pdf_link:
+        lines.append(f"Link PDF: {pdf_link}")
+    elif generated_files.pdf_path:
+        lines.append("Link PDF: chưa tìm thấy trong lần kiểm tra lại Drive; hãy mở thư mục tuần ở trên để kiểm tra file PDF vừa upload.")
     lines.extend([
         "",
         "Kiểm tra nhanh sau khi upload:",
@@ -264,12 +271,12 @@ def handle_command(command: BotCommand) -> str:
 
     if command.action == "generate":
         if command.program == "tds":
-            output_path = generate_tds_docx(command.grade, command.week, "dgs", upload=True, notify=False)
+            generated_files = generate_tds_docx(command.grade, command.week, "dgs", upload=True, notify=False)
         elif command.program == "moet":
-            output_path = generate_moet_docx(command.grade, command.week, upload=True, notify=False)
+            generated_files = generate_moet_docx(command.grade, command.week, upload=True, notify=False)
         else:
             raise ValueError(f"Unsupported program: {command.program}")
-        return format_generation_result(command, output_path.name)
+        return format_generation_result(command, generated_files)
 
     return HELP_TEXT
 
