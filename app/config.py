@@ -15,6 +15,7 @@ load_dotenv(BASE_DIR / ".env")
 class Settings:
     anthropic_api_key: str
     claude_model: str
+    web_word_render_url: str
     telegram_bot_token: str
     telegram_chat_id: str
     google_credentials_file: Path
@@ -47,6 +48,7 @@ def load_settings() -> Settings:
     return Settings(
         anthropic_api_key=_getenv("ANTHROPIC_API_KEY"),
         claude_model=_getenv("CLAUDE_MODEL", "claude-sonnet-4-5"),
+        web_word_render_url=_getenv("WEB_WORD_RENDER_URL"),
         telegram_bot_token=_getenv("TELEGRAM_BOT_TOKEN"),
         telegram_chat_id=_getenv("TELEGRAM_CHAT_ID"),
         google_credentials_file=BASE_DIR / _getenv("GOOGLE_CREDENTIALS_FILE", "credentials/google_credentials.json"),
