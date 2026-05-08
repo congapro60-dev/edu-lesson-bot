@@ -22,7 +22,7 @@ from app.moet_parser import MoetWeekPlan, extract_moet_week
 from app.pdf_renderer import render_pdf
 from app.ppct_parser import TDS_EXCEL_PATH, TDSWeekPlan, extract_tds_week
 from app.telegram_notify import build_notifier
-from app.web_lesson_client import render_docx_with_web, web_render_enabled
+from app.web_lesson_client import render_lesson_files_with_web, web_render_enabled
 
 
 GENERATED_DIR = BASE_DIR / "outputs" / "generated"
@@ -620,15 +620,21 @@ def generate_tds_docx(grade: int, week: int, track: str, upload: bool = False, n
     lesson_text = generate_lesson_text(plan, "TDS")
     title = lesson_title(plan)
     if web_render_enabled():
-        docx_path = render_docx_with_web(
+        files = render_lesson_files_with_web(
             title=title,
             content=lesson_text,
             output_dir=GENERATED_DIR,
-            filename=f"TDS_G{plan.grade}_Tuan_{plan.week:02d}_web.docx",
+            grade=plan.grade,
+            week=plan.week,
+            program="TDS",
+            lesson_name=title,
+            filename_prefix=f"TDS_G{plan.grade}_Tuan_{plan.week:02d}_web",
         )
+        docx_path = files.docx_path
+        pdf_path = files.pdf_path
     else:
         docx_path = build_docx(plan, lesson_text, "TDS")
-    pdf_path = render_pdf(plan, lesson_text, "TDS")
+        pdf_path = render_pdf(plan, lesson_text, "TDS")
     files = GeneratedLessonFiles(docx_path=docx_path, pdf_path=pdf_path)
     print(f"Generated DOCX: {docx_path}")
     print(f"Generated PDF: {pdf_path}")
@@ -653,15 +659,21 @@ def generate_moet_docx(grade: int, week: int, upload: bool = False, notify: bool
     lesson_text = generate_lesson_text(plan, "MOET")
     title = lesson_title(plan)
     if web_render_enabled():
-        docx_path = render_docx_with_web(
+        files = render_lesson_files_with_web(
             title=title,
             content=lesson_text,
             output_dir=GENERATED_DIR,
-            filename=f"MOET_G{plan.grade}_Tuan_{plan.week:02d}_web.docx",
+            grade=plan.grade,
+            week=plan.week,
+            program="MOET",
+            lesson_name=title,
+            filename_prefix=f"MOET_G{plan.grade}_Tuan_{plan.week:02d}_web",
         )
+        docx_path = files.docx_path
+        pdf_path = files.pdf_path
     else:
         docx_path = build_docx(plan, lesson_text, "MOET")
-    pdf_path = render_pdf(plan, lesson_text, "MOET")
+        pdf_path = render_pdf(plan, lesson_text, "MOET")
     files = GeneratedLessonFiles(docx_path=docx_path, pdf_path=pdf_path)
     print(f"Generated DOCX: {docx_path}")
     print(f"Generated PDF: {pdf_path}")
