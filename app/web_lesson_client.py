@@ -10,7 +10,7 @@ from app.config import load_settings
 
 
 DOCX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-DEFAULT_WORD_RENDER_ENDPOINT = "http://localhost:3000/api/render-word"
+DEFAULT_WORD_RENDER_ENDPOINT = "https://giaoandewey.vercel.app/api/render-word"
 FILENAME_RE = re.compile(r"filename\*=UTF-8''([^;]+)|filename=\"?([^\";]+)\"?", re.IGNORECASE)
 
 
