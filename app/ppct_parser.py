@@ -91,6 +91,11 @@ def tds_columns_for_grade(grade: int, track: str = "dgs") -> tuple[int, int, int
 
 
 def extract_tds_week(path: Path, grade: int, week: int, track: str = "dgs") -> TDSWeekPlan:
+    if not path.exists():
+        download_ppct_files()
+    if not path.exists():
+        raise FileNotFoundError(f"PPCT TDS file is missing after download attempt: {path}")
+
     sheet_name = f"G{grade}"
     frame = pd.read_excel(path, sheet_name=sheet_name, header=None)
     subject_col, period_col, content_col, notes_col = tds_columns_for_grade(grade, track)

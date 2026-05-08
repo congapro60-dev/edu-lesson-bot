@@ -156,6 +156,13 @@ def parse_numbered_lessons(text: str) -> list[LessonItem]:
 
 def extract_moet_all_lessons(grade: int) -> list[LessonItem]:
     path = MOET_PDF_PATHS[grade]
+    if not path.exists():
+        from app.ppct_parser import download_ppct_files
+
+        download_ppct_files()
+    if not path.exists():
+        raise FileNotFoundError(f"PPCT MOET file is missing after download attempt: {path}")
+
     text = extract_pdf_text(path)
     lessons = parse_numbered_lessons(text)
     if not lessons:
