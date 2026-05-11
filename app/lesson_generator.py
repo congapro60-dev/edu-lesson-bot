@@ -55,30 +55,145 @@ class ExistingOutputConflict:
     mime_type: str = ""
 
 
-LESSON_SYSTEM_PROMPT = """Bạn là chuyên gia thiết kế kế hoạch dạy học môn Toán THPT theo chuẩn Ban Toán TDS.
-Nhiệm vụ của bạn là tạo giáo án dùng được ngay, chi tiết theo hoạt động lớp học, không viết chung chung.
+# ---------------------------------------------------------------------------
+# Prompt constants — đồng bộ với useLessonCreator.ts trên web
+# ---------------------------------------------------------------------------
+
+LESSON_SYSTEM_PROMPT = """Bạn là một CHUYÊN GIA GIÁO DỤC CAO CẤP với 20 năm kinh nghiệm thiết kế chương trình dạy học theo chuẩn quốc tế.
+Nhiệm vụ: Soạn giáo án \"Masterpiece\" theo chuẩn WALT/WILF + Danielson Framework.
+Phải tạo ra sản phẩm có độ chi tiết tối đa — minute-by-minute, không rút gọn, không generic.
 
 Nguyên tắc bắt buộc:
-1. Bám tuyệt đối PPCT được cung cấp; không bịa bài học, tài liệu, đường dẫn.
-2. Giáo án phải có đúng 4 bước TDS:
-   - KHỞI ĐỘNG/TRẢI NGHIỆM (tối đa 5 phút)
-   - HÌNH THÀNH KIẾN THỨC
-   - RÈN LUYỆN CỦNG CỐ
-   - SƠ KẾT + BTVN
-3. Mỗi hoạt động phải có bảng Markdown đúng 3 cột:
-   | Thời gian thực | Giáo viên và Học sinh | Nội dung |
-4. Thời gian phải ghi theo giờ thực, ví dụ 8h00-8h05, không chỉ ghi "5 phút".
-5. Hoạt động của GV phải là câu hỏi dẫn dắt, scaffolding, phản biện; tránh thuyết trình áp đặt.
-6. Phải có dự kiến câu trả lời cụ thể của HS và phương án hỗ trợ.
-7. Phải phân hóa rõ 3 đối tượng: HS yếu / HS đại trà / HS giỏi.
-8. Phải gắn 5 năng lực cốt lõi Toán học vào hoạt động cụ thể: tư duy và lập luận; mô hình hóa; giải quyết vấn đề; giao tiếp toán học; sử dụng công cụ/phương tiện.
-9. Phần RÈN LUYỆN CỦNG CỐ phải có tối thiểu 3 ví dụ/bài tập từ dễ đến khó, gồm cơ bản, nâng cao, thách thức; đa dạng câu hỏi xuôi/ngược, có/không.
-10. Công thức Toán bắt buộc dùng LaTeX chuẩn:
-    - Inline: $x^2 + 2x + 1 = 0$
-    - Display: $$\\Delta=b^2-4ac$$
-    - Dùng \\frac{a}{b}, \\sqrt{x}, x^{2}, a_{n}, \\sin x, \\cos x, \\vec{u}.
-11. Không dùng ký tự | trong công thức Toán vì sẽ làm vỡ bảng Markdown; dùng \\mid nếu cần.
-12. Trả về nội dung Markdown thuần của giáo án, không bọc trong ```markdown, không giải thích ngoài giáo án."""
+1. Bám tuyệt đối PPCT được cung cấp; không bỏa bài học hay tài liệu.
+2. Trả về toàn bộ nội dung trong thẻ <lesson_content>...</lesson_content>.
+3. LaTeX: inline $...$, display $$...$$. TUYỆT ĐỐI KHÔNG dùng ký tự | trong công thức (dùng \\mid thay thế).
+4. Mỗi lượt trao đổi GV↔HS = 1 hàng riêng trong bảng."""
+
+
+_CLAUDE_FORMAT = """
+===== MẪu GIÁO ÁN (BẮT BUỘC TUÂN THỦ TUYỆT ĐỐI) =====
+
+BỐ CỤC: 5 HOẠT ĐỘNG + ĐÁNH GIÁ DANIELSON
+
+# \U0001f4d8 GIÁO ÁN: [TÊN BÀI HỎc IN HOA]
+**Môn:** Toán | **Lớp:** [lớp] | **Tuần:** [tuần] | **Thời lượng:** 40 phút
+
+---
+
+## \U0001f3af THÔNG TIN CHUNG
+
+**WALT (We Are Learning To):**
+> [Mục tiêu học tập 1-2 câu, giọng “chúng ta sẽ học cách...”]
+
+**WILF (What I’m Looking For):**
+
+| Mức độ | Yêu cầu |
+|---|---|
+| \U0001f336️ Cơ bản | [Yêu cầu tối thiểu — 2-3 ý cụ thể có công thức/ví dụ] |
+| \U0001f336️\U0001f336️ Nâng cao | [Vận dụng linh hoạt — 2-3 dạng bài tiêu biểu] |
+| \U0001f336️\U0001f336️\U0001f336️ Thách thức | [Chứng minh/sáng tạo/kết nối liên môn — 1-2 bài hóc búa] |
+
+**NĂNG LỰC CỐT LÕI:**
+- \U0001f9e0 Tư duy toán học: [Mô tả cụ thể]
+- \U0001f4d0 Mô hình hóa toán học: [Mô tả cụ thể]
+- \U0001f4ac Giao tiếp toán học: [Mô tả cụ thể]
+- \U0001f527 Sử dụng công cụ: [Liệt kê công cụ cụ thể]
+
+---
+
+## \U0001f680 HOẠT ĐỘNG 1: MỞ ĐẦU (~5 phút)
+
+**Mục tiêu:** [Tạo hứng thú, kích hoạt kiến thức nền, đặt vấn đề CỤ THỂ cho bài mới]
+
+| Hoạt động của GV | Hoạt động của HS | Nội dung ghi bảng / Sản phẩm dự kiến |
+|---|---|---|
+| [5-8 lượt thoại, GV verbatim trong “...”] | [HS1, HS2, HS3 phản hồi cụ thể] | [Nội dung bảng/câu hỏi mở] |
+
+---
+
+## \U0001f4da HOẠT ĐỘNG 2: HÌNH THÀNH KIẾN THỨC MỚI (~15 phút)
+
+**Mục tiêu:** [Xây dựng kiến thức cốt lõi, rút ra tính chất quan trọng]
+
+| Hoạt động của GV | Hoạt động của HS | Nội dung ghi bảng / Sản phẩm dự kiến |
+|---|---|---|
+| [5-8 lượt Scaffolding từ dễ đến khó, dùng [Quét Radar], [\U0001f4a1 Tuyên ngôn: ...]] | [HS khám phá, phát biểu quy luật] | [Định lý/công thức LaTeX chính xác] |
+
+---
+
+## ✏️ HOẠT ĐỘNG 3: LUYỆN TậP (~10 phút)
+
+**Mục tiêu:** Rèn kỹ năng — phân hóa 3 mức.
+
+| Hoạt động của GV | Hoạt động của HS | Nội dung ghi bảng / Sản phẩm dự kiến |
+|---|---|---|
+| **\U0001f336️ Bài 1 (Cơ bản):** \"[Đề bài cụ thể]\" | [Tự làm] | Bài 1: [Lời giải] ✅ |
+| **\U0001f336️\U0001f336️ Bài 2 (Nâng cao):** \"[Đề bài cụ thể]\" | [Tự làm] | Bài 2: [Lời giải] ✅ |
+| **\U0001f336️\U0001f336️\U0001f336️ Bài 3 (Thách thức):** \"[Đề bài]\" | [Tự làm] | Bài 3: [Lời giải] ∞ |
+
+---
+
+## \U0001f30d HOẠT ĐỘNG 4: VẬN DỤNG (~5 phút)
+
+**Mục tiêu:** Liên hệ thực tế CỤ THỂ.
+
+| Hoạt động của GV | Hoạt động của HS | Nội dung ghi bảng / Sản phẩm dự kiến |
+|---|---|---|
+| [Tình huống thực tế cụ thể: y học/kinh tế/kỹ thuật/AI/môi trường] | [Tính toán/phân tích] | [Bài toán thực tế + kết quả LaTeX] |
+
+---
+
+## \U0001f4dd HOẠT ĐỘNG 5: SƠ KẾT — DẶN DÒ (~5 phút)
+
+**Mục tiêu:** Hệ thống hóa, giao BTVN phân hóa.
+
+| Hoạt động của GV | Hoạt động của HS | Nội dung ghi bảng / Sản phẩm dự kiến |
+|---|---|---|
+| [Yêu cầu HS tóm tắt 3 ý chính] | [HS1, HS2, HS3 tóm tắt] | \U0001f4cb TÓM TẪT: 1️⃣ ... 2️⃣ ... 3️⃣ ... |
+| [Giao BTVN phân hóa] | [Ghi BTVN] | \U0001f4cc BTVN: 1. Cơ bản 2. Nâng cao ⭐ Thách thức |
+
+---
+
+## \U0001f4cb Đánh giá của tổ trưởng chuyên môn
+
+| Tiêu chí | Điểm | Nhận xét |
+|---|---|---|
+| 1a: Kiến thức chuyên môn & sư phạm | /4 | [Nhận xét cụ thể 2-3 câu] |
+| 1b: Thấu hiểu học sinh | /4 | [Nhận xét cụ thể 2-3 câu] |
+| 1c: Mục tiêu giảng dạy | /4 | [Nhận xét cụ thể 2-3 câu] |
+| 1d: Tài nguyên dạy học | /4 | [Nhận xét cụ thể 2-3 câu] |
+| 1e: Thiết kế bài giảng | /4 | [Nhận xét cụ thể 2-3 câu] |
+| 1f: Đánh giá quá trình | /4 | [Nhận xét cụ thể 2-3 câu] |
+
+**Tổng: /24**
+
+QUY TẪC KHÔNG VI PHẠM:
+1. Đủ 5 hoạt động — không gộp HOẠT ĐỘNG 4+5, không bỏ HOẠT ĐỘNG 5.
+2. WILF đủ 3 mức \U0001f336️ / \U0001f336️\U0001f336️ / \U0001f336️\U0001f336️\U0001f336️.
+3. Header bảng chính xác: \"Hoạt động của GV | Hoạt động của HS | Nội dung ghi bảng / Sản phẩm dự kiến\".
+4. GV verbatim trong \"...\", không mô tả gián tiếp (\"GV nêu vấn đề\" — SAI).
+5. HS phản hồi cụ thể (HS1, HS2...), không generic (\"HS trả lời\" — SAI).
+6. 5-8 lượt thoại mỗi hoạt động.
+7. BTVN có ít nhất 1 bài ⭐ (cho HS khá/giỏi).
+8. Danielson: nhận xét 2-3 câu cụ thể mỗi tiêu chí (không generic).
+9. Dew ey tuyên ngôn: lồng ghép [\U0001f4a1 Tuyên ngôn: ...] vào ít nhất 2 hoạt động.
+===== KẾT THÚC MẪu =====
+"""
+
+
+_MATH_RESTRICTIONS = """
+===========================================================
+QUY TẪC MÔN TOÁN — BẮT BUỘC:
+I. MỤC TIÊU: Tư duy toán học, Mô hình hóa, Giao tiếp toán học, Giải quyết vấn đề, Công cụ & phương tiện.
+   Phân hóa: HS khá/giỏi (nâng cao cụ thể) + HS TB/yếu (tối thiểu cần đạt, hỗ trợ cụ thể).
+
+II. BẢNG 3 CỘT bắt buộc cho TẤT CẢ hoạt động:
+   | Hoạt động của GV | Hoạt động của HS | Nội dung ghi bảng/Sản phẩm dự kiến |
+   Mỗi lượt GV↔HS = 1 hàng riêng. TUYỆT ĐỐI KHÔNG dùng <br/><br/> để gộp nhiều lượt vào 1 hàng.
+
+III. LATEX: $...$ inline, $$...$$ display. TUYỆT ĐỐI KHÔNG dùng | trong công thức → dùng \\mid.
+===========================================================
+"""
 
 
 def tds_grade_output_folder_id(grade: int) -> str:
@@ -104,100 +219,30 @@ def moet_grade_output_folder_id(grade: int) -> str:
 
 
 def build_lesson_prompt(plan: TDSWeekPlan | MoetWeekPlan, program: str = "TDS") -> str:
+    """Build the user-turn prompt for lesson generation, matching the web's structure."""
     lessons_text = "\n".join(
-        f"- Môn/chủ đề: {lesson.subject}\n  Tiết: {lesson.period}\n  Nội dung: {lesson.content}"
+        f"  - Tiết {lesson.period}: {lesson.content}"
         for lesson in plan.lessons
     )
     week_label = getattr(plan, "week_label", f"Tuần {plan.week:02d}")
     month = getattr(plan, "month", "")
-    track = getattr(plan, "track", program)
-    notes = getattr(plan, "notes", "Không có")
-    return f"""Hãy soạn giáo án tuần môn Toán {program} theo chuẩn TDS, dùng trực tiếp trong lớp học.
+    notes = getattr(plan, "notes", "")
+    month_part = f" Tháng: {month}." if month else ""
+    notes_part = f" Ghi chú PPCT: {notes}." if notes else ""
 
-THÔNG TIN PPCT:
-- Khối: {plan.grade}
-- Tuần: {week_label}
-- Tháng: {month or "Không có"}
-- Hệ/chương trình: {track}
-- Ghi chú tuần: {notes or "Không có"}
-- Số tiết trong tuần: {len(plan.lessons)}
-
-NỘI DUNG PPCT CẦN SOẠN:
-{lessons_text}
-
-YÊU CẦU ĐẦU RA BẮT BUỘC:
-
-# KẾ HOẠCH DẠY HỌC MÔN TOÁN {program} - KHỐI {plan.grade} - {week_label}
-
-## I. THÔNG TIN CHUNG
-- Môn học: Toán
-- Khối: {plan.grade}
-- Tuần: {week_label}
-- Thời lượng: {len(plan.lessons)} tiết
-- Nội dung PPCT: tóm tắt đúng các tiết được cung cấp.
-
-## II. MỤC TIÊU HỌC TẬP PHÂN HÓA
-Viết rõ 3 nhóm:
-- HS yếu: mục tiêu tối thiểu, thao tác cơ bản, hỗ trợ cần có.
-- HS đại trà: mục tiêu chuẩn cần đạt, dạng bài trọng tâm.
-- HS giỏi: mục tiêu mở rộng, phản biện, khái quát hóa hoặc vận dụng mới.
-
-## III. NĂNG LỰC TOÁN HỌC GẮN VỚI HOẠT ĐỘNG
-Liệt kê đủ 5 năng lực, mỗi năng lực phải nói rõ xuất hiện ở hoạt động nào:
-1. Tư duy và lập luận toán học
-2. Mô hình hóa toán học
-3. Giải quyết vấn đề toán học
-4. Giao tiếp toán học
-5. Sử dụng công cụ và phương tiện học toán
-
-## IV. CHUẨN BỊ
-- Giáo viên
-- Học sinh
-- Công cụ/phương tiện nếu phù hợp
-
-## V. TIẾN TRÌNH DẠY HỌC
-Với mỗi tiết trong PPCT, viết đủ 4 bước sau. Mỗi bước PHẢI có bảng Markdown 3 cột chính xác:
-| Thời gian thực | Giáo viên và Học sinh | Nội dung |
-|---|---|---|
-
-Quy ước thời gian:
-- Giả định tiết học bắt đầu lúc 8h00 nếu PPCT không nêu giờ.
-- Ghi giờ thực theo khoảng, ví dụ 8h00-8h05, 8h05-8h20.
-- KHỞI ĐỘNG/TRẢI NGHIỆM tối đa 5 phút.
-
-BƯỚC 1. KHỞI ĐỘNG/TRẢI NGHIỆM
-- Tối đa 5 phút.
-- Kết nối kiến thức cũ, khơi gợi tò mò.
-- Ưu tiên trải nghiệm/tình huống/câu hỏi dẫn thẳng vào kiến thức mới.
-
-BƯỚC 2. HÌNH THÀNH KIẾN THỨC
-- Không giảng áp đặt.
-- Dùng chuỗi câu hỏi định hướng tư duy bậc cao: phân tích, so sánh, tổng hợp, phản biện.
-- Có dự kiến câu trả lời của HS.
-- Có ví dụ minh họa đơn giản, tránh phép tính cồng kềnh.
-- Công thức phải viết bằng LaTeX: $x^2 + 2x + 1 = 0$, $$\\Delta=b^2-4ac$$.
-
-BƯỚC 3. RÈN LUYỆN CỦNG CỐ
-- Tối thiểu 3 ví dụ/bài tập.
-- Bài 1 cơ bản cho HS yếu.
-- Bài 2 chuẩn cho HS đại trà.
-- Bài 3 nâng cao/thách thức cho HS giỏi.
-- Đa dạng cách hỏi: câu hỏi xuôi, câu hỏi ngược, câu hỏi có/không kèm giải thích.
-
-BƯỚC 4. SƠ KẾT + BTVN
-- HS tự đánh giá mức đạt mục tiêu.
-- GV chốt lỗi thường gặp.
-- BTVN rõ ràng, phân hóa 3 mức: cơ bản / chuẩn / nâng cao.
-
-## VI. KIỂM TRA NHANH TIÊU CHÍ
-Cuối giáo án thêm checklist ngắn xác nhận:
-- Đủ 4 bước TDS.
-- Có giờ thực.
-- Có phân hóa HS yếu/đại trà/giỏi.
-- Có 5 năng lực Toán gắn hoạt động.
-- Có tối thiểu 3 ví dụ rèn luyện.
-- Công thức dùng LaTeX.
-"""
+    return (
+        f"BẠN LÀ MỘT CHUYÊN GIA GIÁO DỤC CAO CẤP.\n"
+        f"NHIỆM VỤ: Soạn một giáo án \"Masterpiece\" (Kiệt tác sư phạm).\n\n"
+        f"BỐ CỤC PHẢN HỒI BẮT BUỘC:\n"
+        f"1. <thinking>: Phân tích mục tiêu bài học, đặc điểm HS lớp {plan.grade}, lựa chọn phương pháp.\n"
+        f"2. <lesson_content>: TOÀN BỘ giáo án chi tiết (Markdown), BAO GỒM cả đánh giá Danielson ở cuối.\n\n"
+        f"THÔNG TIN BÀI HỌC TỪ PPCT:\n"
+        f"- Chương trình: Toán {program}. Lớp: {plan.grade}. {week_label}.{month_part}{notes_part}\n"
+        f"- Số tiết tuần này: {len(plan.lessons)}\n"
+        f"- Nội dung PPCT:\n{lessons_text}\n"
+        f"{_CLAUDE_FORMAT}\n"
+        f"{_MATH_RESTRICTIONS}"
+    )
 
 
 def generate_lesson_text(plan: TDSWeekPlan | MoetWeekPlan, program: str = "TDS") -> str:
@@ -207,21 +252,29 @@ def generate_lesson_text(plan: TDSWeekPlan | MoetWeekPlan, program: str = "TDS")
     try:
         response = client.messages.create(
             model=settings.claude_model,
-            max_tokens=10000,
+            max_tokens=16000,
             system=LESSON_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": build_lesson_prompt(plan, program)}],
         )
     except Exception as exc:
         raise RuntimeError(
-            "Không tạo giáo án fallback/draft. API sinh nội dung lỗi nên bot dừng trước khi xuất hoặc upload file. "
+            "Không tạo được giáo án. API lỗi. "
             f"Chi tiết: {exc}"
         ) from exc
 
-    lesson_text = "\n".join(
+    raw_text = "\n".join(
         block.text for block in response.content if getattr(block, "type", "") == "text"
     ).strip()
+
+    # Trích xuất <lesson_content> — giống hàm extractLessonContent() trên web
+    content_match = re.search(r"<lesson_content>([\s\S]*?)</lesson_content>", raw_text, re.IGNORECASE)
+    if content_match:
+        lesson_text = content_match.group(1).strip()
+    else:
+        lesson_text = re.sub(r"<thinking>[\s\S]*?</thinking>", "", raw_text, flags=re.IGNORECASE).strip()
+
     if not lesson_text:
-        raise RuntimeError("API sinh nội dung không trả về giáo án hợp lệ; bot dừng để tránh upload file rỗng.")
+        raise RuntimeError("API không trả về giáo án hợp lệ; bot dừng để tránh upload file rỗng.")
     return lesson_text
 
 
@@ -619,7 +672,7 @@ def build_docx(
     set_table_borders(info_table)
     rows = [
         ["Lớp", str(plan.grade), "Tên bài học", title, "Môn học", "Toán"],
-        ["Giáo viên", "TDS THT", "Tuần học", str(plan.week), "Năm học", "2025 – 2026"],
+        ["Giáo viên", "TDS THT", "Tuần học", str(plan.week), "Năm học", "2025 – 2026"],
     ]
     for row, values in zip(info_table.rows, rows, strict=True):
         for index, value in enumerate(values):
