@@ -11,7 +11,13 @@ import requests
 from app.config import load_settings, require_values
 from app.drive_audit import WeekAudit, audit_week, format_week_audit
 from app.drive_client import GoogleDriveClient
-from app.lesson_generator import GeneratedLessonBatch, generate_moet_docx, generate_tds_docx
+from app.lesson_generator import (
+    ExistingOutputConflict,
+    GeneratedLessonBatch,
+    find_existing_output_conflicts,
+    generate_moet_docx,
+    generate_tds_docx,
+)
 from app.telegram_notify import build_notifier
 
 
@@ -22,6 +28,12 @@ class BotCommand:
     grade: int
     week: int
     upload: bool = False
+
+
+@dataclass(frozen=True)
+class PendingOverwriteConfirmation:
+    command: BotCommand
+    conflicts: list[ExistingOutputConflict]
 
 
 @dataclass(frozen=True)
@@ -201,6 +213,53 @@ def find_uploaded_file_link(audit: WeekAudit, filename: str) -> str:
     return ""
 
 
+def format_conflict_confirmation(command: BotCommand, conflicts: list[ExistingOutputConflict]) -> str:
+    lines = [
+        f"Phát hiện giáo án cũ đã có sẵn trong Drive cho {command.program.upper()} G{command.grade} tuần {command.week:02d}.",
+        "Bot chưa xóa hoặc thay thế file nào.",
+        "",
+        "Các file đang trùng tên với giáo án chuẩn sắp tạo:",
+    ]
+    for index, conflict in enumerate(conflicts, start=1):
+        link = conflict.web_view_link or build_drive_file_link(conflict.file_id)
+        suffix = f" | {link}" if link else ""
+        lines.append(f"{index}. {conflict.filename}{suffix}")
+
+    lines.extend([
+        "",
+        "Nếu muốn thay các file cũ bằng bản mới, hãy trả lời đúng một trong các câu sau:",
+        "- xác nhận ghi đè",
+        "- đồng ý ghi đè",
+        "- thay file cũ",
+        "",
+        "Nếu không muốn thay, hãy trả lời: hủy",
+    ])
+    return "\n".join(lines)
+
+
+def is_overwrite_confirmation(text: str) -> bool:
+    normalized = normalize_text(text)
+    confirmation_phrases = [
+        "xác nhận ghi đè",
+        "xac nhan ghi de",
+        "đồng ý ghi đè",
+        "dong y ghi de",
+        "ghi đè",
+        "ghi de",
+        "thay file cũ",
+        "thay file cu",
+        "replace",
+        "overwrite",
+    ]
+    return any(phrase in normalized for phrase in confirmation_phrases)
+
+
+def is_cancel_confirmation(text: str) -> bool:
+    normalized = normalize_text(text)
+    cancel_phrases = ["hủy", "huy", "không", "khong", "không ghi đè", "khong ghi de", "cancel", "bỏ qua", "bo qua"]
+    return any(phrase in normalized for phrase in cancel_phrases)
+
+
 def format_generation_result(command: BotCommand, generated_files: GeneratedLessonBatch) -> str:
     audit = audit_week(command.program, command.grade, command.week)
     folder_link = audit_folder_link(audit)
@@ -276,6 +335,14 @@ def build_clarification_message(parsed: ParsedRequest) -> str:
     return "\n".join(lines)
 
 
+def generate_and_upload(command: BotCommand, replace_existing: bool = False) -> GeneratedLessonBatch:
+    if command.program == "tds":
+        return generate_tds_docx(command.grade, command.week, "dgs", upload=True, notify=False, replace_existing=replace_existing)
+    if command.program == "moet":
+        return generate_moet_docx(command.grade, command.week, upload=True, notify=False, replace_existing=replace_existing)
+    raise ValueError(f"Unsupported program: {command.program}")
+
+
 def handle_command(command: BotCommand) -> str:
     if command.action == "help":
         return HELP_TEXT
@@ -285,12 +352,7 @@ def handle_command(command: BotCommand) -> str:
         return format_week_audit_with_links(audit, command.program.upper())
 
     if command.action == "generate":
-        if command.program == "tds":
-            generated_files = generate_tds_docx(command.grade, command.week, "dgs", upload=True, notify=False)
-        elif command.program == "moet":
-            generated_files = generate_moet_docx(command.grade, command.week, upload=True, notify=False)
-        else:
-            raise ValueError(f"Unsupported program: {command.program}")
+        generated_files = generate_and_upload(command, replace_existing=False)
         return format_generation_result(command, generated_files)
 
     return HELP_TEXT
@@ -303,6 +365,7 @@ class TelegramPollingBot:
         self.owner_chat_id = str(settings.telegram_chat_id)
         self.api_base = f"https://api.telegram.org/bot{settings.telegram_bot_token}"
         self.pending_requests: dict[str, ParsedRequest] = {}
+        self.pending_overwrites: dict[str, PendingOverwriteConfirmation] = {}
 
     def get_updates(self, offset: int | None) -> list[dict]:
         params: dict[str, int] = {"timeout": 25}
@@ -324,7 +387,32 @@ class TelegramPollingBot:
             )
             response.raise_for_status()
 
+    def resolve_overwrite_confirmation(self, chat_id: str, text: str) -> str | None:
+        pending = self.pending_overwrites.get(chat_id)
+        if not pending:
+            return None
+
+        if is_cancel_confirmation(text):
+            self.pending_overwrites.pop(chat_id, None)
+            return "Đã hủy yêu cầu ghi đè. Bot không xóa, không thay thế và không upload file mới."
+
+        if not is_overwrite_confirmation(text):
+            self.send_message(
+                chat_id,
+                "Mình đang chờ xác nhận ghi đè giáo án cũ. Hãy trả lời 'xác nhận ghi đè' để thay file cũ, hoặc 'hủy' để dừng.",
+            )
+            return ""
+
+        self.pending_overwrites.pop(chat_id, None)
+        self.send_message(
+            chat_id,
+            f"Đã nhận xác nhận ghi đè {pending.command.program.upper()} G{pending.command.grade} tuần {pending.command.week:02d}. Tôi sẽ đưa file cũ vào thùng rác rồi upload bản mới...",
+        )
+        generated_files = generate_and_upload(pending.command, replace_existing=True)
+        return format_generation_result(pending.command, generated_files)
+
     def resolve_command(self, chat_id: str, text: str) -> BotCommand | None:
+        self.pending_overwrites.pop(chat_id, None)
         parsed = parse_request(text)
         if isinstance(parsed, BotCommand):
             self.pending_requests.pop(chat_id, None)
@@ -351,11 +439,24 @@ class TelegramPollingBot:
         if not text:
             return
 
-        command = self.resolve_command(chat_id, text)
-        if not command:
-            return
-
         try:
+            overwrite_result = self.resolve_overwrite_confirmation(chat_id, text)
+            if overwrite_result is not None:
+                if overwrite_result:
+                    self.send_message(chat_id, overwrite_result)
+                return
+
+            command = self.resolve_command(chat_id, text)
+            if not command:
+                return
+
+            if command.action == "generate":
+                conflicts = find_existing_output_conflicts(command.program, command.grade, command.week)
+                if conflicts:
+                    self.pending_overwrites[chat_id] = PendingOverwriteConfirmation(command=command, conflicts=conflicts)
+                    self.send_message(chat_id, format_conflict_confirmation(command, conflicts))
+                    return
+
             if command.action != "help":
                 action_label = ACTION_LABELS.get(command.action, command.action)
                 self.send_message(

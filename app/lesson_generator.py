@@ -47,6 +47,14 @@ class GeneratedLessonBatch:
     items: list[GeneratedLessonFiles]
 
 
+@dataclass(frozen=True)
+class ExistingOutputConflict:
+    filename: str
+    file_id: str
+    web_view_link: str = ""
+    mime_type: str = ""
+
+
 LESSON_SYSTEM_PROMPT = """Bạn là chuyên gia thiết kế kế hoạch dạy học môn Toán THPT theo chuẩn Ban Toán TDS.
 Nhiệm vụ của bạn là tạo giáo án dùng được ngay, chi tiết theo hoạt động lớp học, không viết chung chung.
 
@@ -360,6 +368,64 @@ def single_lesson_plan(plan: TDSWeekPlan | MoetWeekPlan, lesson: LessonItem) -> 
     return MoetWeekPlan(grade=plan.grade, week=plan.week, lessons=[lesson])
 
 
+def expected_lesson_file_names(plan: TDSWeekPlan | MoetWeekPlan) -> list[str]:
+    names: list[str] = []
+    for index, lesson in enumerate(plan.lessons, start=1):
+        prefix = lesson_filename_prefix(lesson, index)
+        names.extend([f"{prefix}.docx", f"{prefix}.pdf"])
+    return names
+
+
+def load_week_plan(program: str, grade: int, week: int, track: str = "dgs") -> TDSWeekPlan | MoetWeekPlan:
+    normalized = program.lower().strip()
+    if normalized == "tds":
+        return extract_tds_week(TDS_EXCEL_PATH, grade, week, track)
+    if normalized == "moet":
+        return extract_moet_week(grade, week)
+    raise ValueError(f"Unsupported program: {program}")
+
+
+def output_parent_folder_id(program: str, grade: int) -> str:
+    normalized = program.lower().strip()
+    if normalized == "tds":
+        return tds_grade_output_folder_id(grade)
+    if normalized == "moet":
+        return moet_grade_output_folder_id(grade)
+    raise ValueError(f"Unsupported program: {program}")
+
+
+def find_existing_output_conflicts(
+    program: str,
+    grade: int,
+    week: int,
+    track: str = "dgs",
+) -> list[ExistingOutputConflict]:
+    plan = load_week_plan(program, grade, week, track)
+    expected_names = set(expected_lesson_file_names(plan))
+    if not expected_names:
+        return []
+
+    client = GoogleDriveClient()
+    week_folder = find_week_folder(client, output_parent_folder_id(program, grade), week)
+    if not week_folder:
+        return []
+
+    files = client.list_files(query=f"'{week_folder['id']}' in parents and trashed = false", page_size=100)
+    conflicts: list[ExistingOutputConflict] = []
+    for file in files:
+        name = file.get("name", "")
+        if name in expected_names:
+            conflicts.append(
+                ExistingOutputConflict(
+                    filename=name,
+                    file_id=file.get("id", ""),
+                    web_view_link=file.get("webViewLink", ""),
+                    mime_type=file.get("mimeType", ""),
+                )
+            )
+    return conflicts
+
+
 def apply_base_style(document: Document) -> None:
     styles = document.styles
     styles["Normal"].font.name = "Times New Roman"
@@ -583,17 +649,22 @@ def get_existing_or_create_week_folder(client: GoogleDriveClient, parent_id: str
     return client.get_or_create_child_folder(parent_id, f"Tuần {week}")
 
 
-def upload_generated_files(files: GeneratedLessonFiles, parent_id: str, week: int) -> dict[str, str]:
+def upload_generated_files(
+    files: GeneratedLessonFiles,
+    parent_id: str,
+    week: int,
+    replace_existing: bool = False,
+) -> dict[str, str]:
     client = GoogleDriveClient()
     week_folder = get_existing_or_create_week_folder(client, parent_id, week)
     links: dict[str, str] = {}
 
-    uploaded_docx = client.upload_file(files.docx_path, week_folder["id"], DOCX_MIME_TYPE, replace_existing=True)
+    uploaded_docx = client.upload_file(files.docx_path, week_folder["id"], DOCX_MIME_TYPE, replace_existing=replace_existing)
     links["docx"] = uploaded_docx.get("webViewLink", "")
     print(f"Uploaded DOCX: {uploaded_docx.get('name')} | {uploaded_docx.get('id')} | {links['docx']}")
 
     if files.pdf_path:
-        uploaded_pdf = client.upload_file(files.pdf_path, week_folder["id"], PDF_MIME_TYPE, replace_existing=True)
+        uploaded_pdf = client.upload_file(files.pdf_path, week_folder["id"], PDF_MIME_TYPE, replace_existing=replace_existing)
         links["pdf"] = uploaded_pdf.get("webViewLink", "")
         print(f"Uploaded PDF: {uploaded_pdf.get('name')} | {uploaded_pdf.get('id')} | {links['pdf']}")
 
@@ -640,6 +711,7 @@ def generate_lesson_batch(
     parent_id: str,
     upload: bool = False,
     notify: bool = False,
+    replace_existing: bool = False,
 ) -> GeneratedLessonBatch:
     if not plan.lessons:
         raise RuntimeError(f"Không tìm thấy bài học PPCT cho {program} G{plan.grade} tuần {plan.week:02d}.")
@@ -651,7 +723,7 @@ def generate_lesson_batch(
 
     if upload:
         generated_items = [
-            replace(files, uploaded_links=upload_generated_files(files, parent_id, plan.week))
+            replace(files, uploaded_links=upload_generated_files(files, parent_id, plan.week, replace_existing))
             for files in generated_items
         ]
 
@@ -673,15 +745,28 @@ def generate_lesson_batch(
 
 
 
-def generate_tds_docx(grade: int, week: int, track: str, upload: bool = False, notify: bool = False) -> GeneratedLessonBatch:
+def generate_tds_docx(
+    grade: int,
+    week: int,
+    track: str,
+    upload: bool = False,
+    notify: bool = False,
+    replace_existing: bool = False,
+) -> GeneratedLessonBatch:
     plan = extract_tds_week(TDS_EXCEL_PATH, grade, week, track)
-    return generate_lesson_batch(plan, "TDS", tds_grade_output_folder_id(grade), upload, notify)
+    return generate_lesson_batch(plan, "TDS", tds_grade_output_folder_id(grade), upload, notify, replace_existing)
 
 
 
-def generate_moet_docx(grade: int, week: int, upload: bool = False, notify: bool = False) -> GeneratedLessonBatch:
+def generate_moet_docx(
+    grade: int,
+    week: int,
+    upload: bool = False,
+    notify: bool = False,
+    replace_existing: bool = False,
+) -> GeneratedLessonBatch:
     plan = extract_moet_week(grade, week)
-    return generate_lesson_batch(plan, "MOET", moet_grade_output_folder_id(grade), upload, notify)
+    return generate_lesson_batch(plan, "MOET", moet_grade_output_folder_id(grade), upload, notify, replace_existing)
 
 def selected_programs(include_tds: bool, include_moet: bool) -> list[str]:
     programs: list[str] = []
