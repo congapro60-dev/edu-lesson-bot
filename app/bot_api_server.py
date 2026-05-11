@@ -18,13 +18,13 @@ from app.drive_client import GoogleDriveClient
 app = FastAPI(title="Lesson Bot API", docs_url=None, redoc_url=None)
 
 # Allow the soangiaoan web app (any origin) to call these endpoints from the browser.
-# Auth is handled via X-API-Token header, not cookies, so allow_credentials=False is correct.
+# Auth is token-based (Authorization: Bearer), not cookie-based, so allow_credentials=False is correct.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["X-API-Token", "Content-Type"],
+    allow_headers=["Authorization", "X-API-Token", "Content-Type"],
 )
 
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -45,12 +45,21 @@ def _root_folder_id(lesson_type: str, grade: int) -> str:
     return folder_id
 
 
-def verify_token(x_api_token: Annotated[str | None, Header()] = None) -> None:
+def verify_token(
+    authorization: Annotated[str | None, Header()] = None,
+    x_api_token: Annotated[str | None, Header()] = None,
+) -> None:
+    """Accept Authorization: Bearer <token> (preferred) or X-API-Token: <token> (legacy)."""
     expected = os.getenv("WEB_API_TOKEN", "").strip()
     if not expected:
         raise HTTPException(status_code=500, detail="WEB_API_TOKEN not configured on server")
-    if not hmac.compare_digest(x_api_token or "", expected):
-        raise HTTPException(status_code=401, detail="Invalid or missing X-API-Token")
+    token: str | None = None
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization[7:]
+    elif x_api_token:
+        token = x_api_token
+    if not token or not hmac.compare_digest(token, expected):
+        raise HTTPException(status_code=401, detail="Invalid or missing auth token")
 
 
 class CheckRequest(BaseModel):
@@ -70,7 +79,8 @@ async def check_lesson(body: CheckRequest) -> JSONResponse:
 
     root_id = _root_folder_id(body.lesson_type, body.grade)
     client = GoogleDriveClient()
-    week_folder = client.find_child_folder(root_id, f"Tuần {body.week:02d}")
+    # find_week_folder handles both 'Tuần 1' and 'Tuần 01' to avoid creating duplicates
+    week_folder = client.find_week_folder(root_id, body.week)
 
     if not week_folder:
         return JSONResponse({
@@ -109,9 +119,14 @@ async def upload_lesson(
     lesson_type: Annotated[str, Form()],
     grade: Annotated[int, Form()],
     week: Annotated[int, Form()],
-    replace_existing: Annotated[bool, Form()] = True,
+    replace_existing: Annotated[bool, Form()] = False,
+    period: Annotated[str | None, Form()] = None,
+    subject: Annotated[str | None, Form()] = None,
 ) -> JSONResponse:
-    """Upload a DOCX or PDF lesson file into the correct Drive week sub-folder."""
+    """Upload a DOCX or PDF lesson file into the correct Drive week sub-folder.
+
+    Returns 409 if file already exists and replace_existing=False.
+    """
     if grade not in (10, 11, 12):
         raise HTTPException(status_code=400, detail="grade must be 10, 11, or 12")
     if not 1 <= week <= 40:
@@ -119,31 +134,42 @@ async def upload_lesson(
     if not file.filename:
         raise HTTPException(status_code=400, detail="filename required")
 
-    ext = Path(file.filename).suffix.lower().lstrip(".")
+    safe_filename = Path(file.filename).name  # strip any path traversal
+    ext = Path(safe_filename).suffix.lower().lstrip(".")
     mime_type = _EXT_MIME.get(ext) or file.content_type or "application/octet-stream"
 
     root_id = _root_folder_id(lesson_type, grade)
     client = GoogleDriveClient()
-    week_folder = client.get_or_create_child_folder(root_id, f"Tuần {week:02d}")
-    folder_id = week_folder["id"]
-    folder_url = week_folder.get("webViewLink") or f"https://drive.google.com/drive/folders/{folder_id}"
 
     content = await file.read()
     tmp_dir = Path(tempfile.mkdtemp())
     try:
-        tmp_path = tmp_dir / file.filename
+        tmp_path = tmp_dir / safe_filename
         tmp_path.write_bytes(content)
-        result = client.upload_file(tmp_path, folder_id, mime_type=mime_type, replace_existing=replace_existing)
+        try:
+            file_result, folder = client.upload_to_week_folder(
+                tmp_path, root_id, week, mime_type=mime_type, replace_existing=replace_existing
+            )
+        except FileExistsError as exc:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "conflict": True,
+                    "filename": str(exc),
+                    "detail": f"'{exc}' đã tồn tại trên Drive. Gửi lại với replace_existing=true để ghi đè.",
+                },
+            )
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
-    file_id = result.get("id", "")
+    folder_url = folder.get("webViewLink") or f"https://drive.google.com/drive/folders/{folder['id']}"
+    file_id = file_result.get("id", "")
     return JSONResponse({
         "success": True,
         "drive_file_id": file_id,
-        "drive_url": result.get("webViewLink") or f"https://drive.google.com/file/d/{file_id}/view",
+        "drive_url": file_result.get("webViewLink") or f"https://drive.google.com/file/d/{file_id}/view",
         "folder_url": folder_url,
-        "filename": result.get("name"),
+        "filename": file_result.get("name"),
     })
 
 
