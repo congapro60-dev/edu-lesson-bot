@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import re
 import time
+import unicodedata
 from dataclasses import dataclass, replace
 
 import requests
@@ -84,7 +85,8 @@ PROGRAM_LABELS = {"tds": "TDS", "moet": "MOET"}
 
 
 def normalize_text(text: str) -> str:
-    return text.lower().strip()
+    normalized = unicodedata.normalize("NFC", text)
+    return re.sub(r"\s+", " ", normalized.lower()).strip()
 
 
 def extract_grade(text: str) -> int | None:
