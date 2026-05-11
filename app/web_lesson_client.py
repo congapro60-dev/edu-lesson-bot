@@ -95,7 +95,7 @@ def render_docx_with_web(
 
 
 def _write_base64_payload(file_data: dict, output_dir: Path, fallback_name: str, expected_suffix: str) -> Path:
-    filename = _safe_filename(str(file_data.get("filename") or fallback_name), fallback_name)
+    filename = _safe_filename(fallback_name, fallback_name)
     if not filename.lower().endswith(expected_suffix):
         filename += expected_suffix
 
@@ -153,7 +153,7 @@ def render_lesson_files_with_web(
     except ValueError as exc:
         raise WebLessonRenderError("Web export lesson không trả về JSON hợp lệ") from exc
 
-    prefix = filename_prefix or f"{program}_G{grade}_Tuan_{week:02d}_web"
+    prefix = filename_prefix or f"{program}_G{grade}_Tuan_{week:02d}"
     word_data = payload.get("word") or {}
     pdf_data = payload.get("pdf") or {}
     docx_path = _write_base64_payload(word_data, output_dir, f"{prefix}.docx", ".docx")

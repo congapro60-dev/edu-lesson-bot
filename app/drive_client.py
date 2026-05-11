@@ -126,6 +126,29 @@ class GoogleDriveClient:
             return existing
         return self.create_folder(name=name, parent_id=parent_id)
 
+    def find_child_file(self, parent_id: str, name: str) -> dict[str, Any] | None:
+        escaped_name = name.replace("'", "\\'")
+        query = (
+            f"'{parent_id}' in parents and "
+            f"name = '{escaped_name}' and "
+            "mimeType != 'application/vnd.google-apps.folder' and "
+            "trashed = false"
+        )
+        files = self.list_files(query=query, page_size=10)
+        return files[0] if files else None
+
+    def trash_file(self, file_id: str) -> dict[str, Any]:
+        return (
+            self.service.files()
+            .update(
+                fileId=file_id,
+                body={"trashed": True},
+                fields="id, name, trashed",
+                supportsAllDrives=True,
+            )
+            .execute()
+        )
+
     def download_file(self, file_id: str, output_path: Path) -> Path:
         request = self.service.files().get_media(fileId=file_id, supportsAllDrives=True)
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -136,7 +159,19 @@ class GoogleDriveClient:
                 _, done = downloader.next_chunk()
         return output_path
 
-    def upload_file(self, local_path: Path, parent_id: str, mime_type: str | None = None) -> dict[str, Any]:
+    def upload_file(
+        self,
+        local_path: Path,
+        parent_id: str,
+        mime_type: str | None = None,
+        replace_existing: bool = False,
+    ) -> dict[str, Any]:
+        if replace_existing:
+            existing = self.find_child_file(parent_id, local_path.name)
+            while existing:
+                self.trash_file(existing["id"])
+                existing = self.find_child_file(parent_id, local_path.name)
+
         media = MediaFileUpload(str(local_path), mimetype=mime_type, resumable=True)
         metadata = {"name": local_path.name, "parents": [parent_id]}
         return (

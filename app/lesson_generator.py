@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import argparse
 import re
-from dataclasses import dataclass
+import unicodedata
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from app.drive_audit import PROGRAM_LABELS, audit_all_range, collect_missing_weeks, find_week_folder
@@ -20,7 +21,7 @@ from app.drive_client import GoogleDriveClient
 from app.math_docx import add_math_aware_paragraph
 from app.moet_parser import MoetWeekPlan, extract_moet_week
 from app.pdf_renderer import render_pdf
-from app.ppct_parser import TDS_EXCEL_PATH, TDSWeekPlan, extract_tds_week
+from app.ppct_parser import TDS_EXCEL_PATH, LessonItem, TDSWeekPlan, extract_tds_week
 from app.telegram_notify import build_notifier
 from app.web_lesson_client import render_lesson_files_with_web, web_render_enabled
 
@@ -37,6 +38,13 @@ PDF_MIME_TYPE = "application/pdf"
 class GeneratedLessonFiles:
     docx_path: Path
     pdf_path: Path | None = None
+    lesson_title: str = ""
+    uploaded_links: dict[str, str] | None = None
+
+
+@dataclass(frozen=True)
+class GeneratedLessonBatch:
+    items: list[GeneratedLessonFiles]
 
 
 LESSON_SYSTEM_PROMPT = """Bạn là chuyên gia thiết kế kế hoạch dạy học môn Toán THPT theo chuẩn Ban Toán TDS.
@@ -184,76 +192,6 @@ Cuối giáo án thêm checklist ngắn xác nhận:
 """
 
 
-def generate_fallback_lesson_text(plan: TDSWeekPlan | MoetWeekPlan, reason: str, program: str = "TDS") -> str:
-    week_label = getattr(plan, "week_label", f"Tuần {plan.week}")
-    track = getattr(plan, "track", program)
-    lesson_sections = []
-    for lesson in plan.lessons:
-        lesson_sections.append(
-            f"""## Tiết {lesson.period}: {lesson.content}
-
-### BƯỚC 1. KHỞI ĐỘNG/TRẢI NGHIỆM
-| Thời gian thực | Giáo viên và Học sinh | Nội dung |
-|---|---|---|
-| 8h00-8h05 | GV nêu tình huống gắn với kiến thức cũ và hỏi: "Điều gì trong tình huống này khiến ta cần kiến thức mới?"<br/>HS dự đoán, nêu hiểu biết ban đầu. | Câu hỏi khởi động dẫn vào nội dung: {lesson.content}. |
-
-### BƯỚC 2. HÌNH THÀNH KIẾN THỨC
-| Thời gian thực | Giáo viên và Học sinh | Nội dung |
-|---|---|---|
-| 8h05-8h20 | GV đặt câu hỏi phân tích, so sánh và phản biện để HS tự rút ra kiến thức.<br/>HS yếu trả lời câu hỏi nhận biết; HS đại trà giải thích quy trình; HS giỏi nêu phản ví dụ hoặc mở rộng. | Kiến thức trọng tâm của tiết {lesson.period}.<br/>Ví dụ công thức minh họa nếu cần: $x^2 + 2x + 1 = 0$. |
-
-### BƯỚC 3. RÈN LUYỆN CỦNG CỐ
-| Thời gian thực | Giáo viên và Học sinh | Nội dung |
-|---|---|---|
-| 8h20-8h28 | GV giao Bài 1 cơ bản, hỗ trợ HS yếu bằng gợi ý từng bước.<br/>HS trình bày thao tác nền tảng. | Bài 1 cơ bản: nhận diện và áp dụng trực tiếp kiến thức. |
-| 8h28-8h35 | GV giao Bài 2 chuẩn, yêu cầu HS giải thích vì sao chọn cách làm.<br/>HS đại trà trình bày lời giải và kiểm tra kết quả. | Bài 2 chuẩn: bài tập thông hiểu/vận dụng trực tiếp. |
-| 8h35-8h40 | GV giao Bài 3 nâng cao dạng ngược hoặc có/không kèm giải thích.<br/>HS giỏi phản biện và khái quát hóa. | Bài 3 nâng cao: câu hỏi ngược/có-không, yêu cầu lập luận. |
-
-### BƯỚC 4. SƠ KẾT + BTVN
-| Thời gian thực | Giáo viên và Học sinh | Nội dung |
-|---|---|---|
-| 8h40-8h45 | GV yêu cầu HS tự đánh giá: "Em đã đạt mục tiêu nào? Còn vướng ở đâu?"<br/>HS ghi phiếu tự đánh giá và nhận BTVN phân hóa. | BTVN: cơ bản cho HS yếu; chuẩn cho HS đại trà; nâng cao cho HS giỏi. |"""
-        )
-
-    return f"""# KẾ HOẠCH DẠY HỌC MÔN TOÁN {program} - KHỐI {plan.grade} - {week_label}
-
-> Bản fallback do chưa gọi được API sinh nội dung chi tiết. Lý do: {reason}
-
-## I. THÔNG TIN CHUNG
-- Môn học: Toán
-- Khối: {plan.grade}
-- Tuần: {week_label}
-- Hệ/chương trình: {track}
-- Thời lượng: {len(plan.lessons)} tiết
-
-## II. MỤC TIÊU HỌC TẬP PHÂN HÓA
-- HS yếu: nhận diện được dạng toán và thực hiện thao tác cơ bản với gợi ý.
-- HS đại trà: giải được bài tập chuẩn, giải thích được quy trình và kiểm tra kết quả.
-- HS giỏi: xử lí câu hỏi mở rộng, phản biện cách làm và khái quát hóa.
-
-## III. NĂNG LỰC TOÁN HỌC GẮN VỚI HOẠT ĐỘNG
-- Tư duy và lập luận toán học: dùng ở hình thành kiến thức và rèn luyện.
-- Mô hình hóa toán học: dùng khi chuyển tình huống thành biểu thức/hình vẽ.
-- Giải quyết vấn đề toán học: dùng trong chuỗi bài tập từ cơ bản đến nâng cao.
-- Giao tiếp toán học: dùng khi HS trình bày và phản biện lời giải.
-- Sử dụng công cụ và phương tiện học toán: dùng máy tính, thước, hình vẽ hoặc phần mềm khi phù hợp.
-
-## IV. CHUẨN BỊ
-- Giáo viên: kế hoạch dạy học, câu hỏi định hướng, phiếu bài tập phân hóa.
-- Học sinh: vở ghi, dụng cụ học tập, kiến thức nền liên quan.
-
-## V. TIẾN TRÌNH DẠY HỌC
-{chr(10).join(lesson_sections)}
-
-## VI. KIỂM TRA NHANH TIÊU CHÍ
-- Đủ 4 bước TDS.
-- Có giờ thực.
-- Có phân hóa HS yếu/đại trà/giỏi.
-- Có 5 năng lực Toán gắn hoạt động.
-- Có tối thiểu 3 ví dụ rèn luyện.
-- Công thức dùng LaTeX."""
-
-
 def generate_lesson_text(plan: TDSWeekPlan | MoetWeekPlan, program: str = "TDS") -> str:
     settings = load_settings()
     require_values(settings, ["anthropic_api_key"])
@@ -266,11 +204,17 @@ def generate_lesson_text(plan: TDSWeekPlan | MoetWeekPlan, program: str = "TDS")
             messages=[{"role": "user", "content": build_lesson_prompt(plan, program)}],
         )
     except Exception as exc:
-        return generate_fallback_lesson_text(plan, str(exc), program)
+        raise RuntimeError(
+            "Không tạo giáo án fallback/draft. API sinh nội dung lỗi nên bot dừng trước khi xuất hoặc upload file. "
+            f"Chi tiết: {exc}"
+        ) from exc
 
-    return "\n".join(
+    lesson_text = "\n".join(
         block.text for block in response.content if getattr(block, "type", "") == "text"
-    )
+    ).strip()
+    if not lesson_text:
+        raise RuntimeError("API sinh nội dung không trả về giáo án hợp lệ; bot dừng để tránh upload file rỗng.")
+    return lesson_text
 
 
 def clean_markdown_inline(text: str) -> str:
@@ -379,6 +323,41 @@ def lesson_title(plan: TDSWeekPlan | MoetWeekPlan) -> str:
 
 def ppct_summary(plan: TDSWeekPlan | MoetWeekPlan) -> str:
     return "\n".join(f"Tiết {lesson.period}: {lesson.content}" for lesson in plan.lessons)
+
+
+def safe_filename_part(value: str, fallback: str = "giao-an") -> str:
+    normalized = unicodedata.normalize("NFC", value or "")
+    cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]', " ", normalized)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" .")
+    return cleaned or fallback
+
+
+def limit_filename_stem(stem: str, max_length: int = 150) -> str:
+    if len(stem) <= max_length:
+        return stem
+    return stem[:max_length].rstrip(" .,-–—")
+
+
+def lesson_filename_prefix(lesson: LessonItem, index: int) -> str:
+    content = safe_filename_part(lesson.content, f"Bài {index:02d}")
+    period = safe_filename_part(lesson.period, "")
+    if period:
+        return limit_filename_stem(f"Tiết {period} - {content}")
+    return limit_filename_stem(content)
+
+
+def single_lesson_plan(plan: TDSWeekPlan | MoetWeekPlan, lesson: LessonItem) -> TDSWeekPlan | MoetWeekPlan:
+    if isinstance(plan, TDSWeekPlan):
+        return TDSWeekPlan(
+            grade=plan.grade,
+            week=plan.week,
+            week_label=plan.week_label,
+            month=plan.month,
+            track=plan.track,
+            notes=plan.notes,
+            lessons=[lesson],
+        )
+    return MoetWeekPlan(grade=plan.grade, week=plan.week, lessons=[lesson])
 
 
 def apply_base_style(document: Document) -> None:
@@ -551,9 +530,15 @@ def create_document_from_template() -> Document:
     return Document()
 
 
-def build_docx(plan: TDSWeekPlan | MoetWeekPlan, lesson_text: str, program: str = "TDS") -> Path:
+def build_docx(
+    plan: TDSWeekPlan | MoetWeekPlan,
+    lesson_text: str,
+    program: str = "TDS",
+    filename_prefix: str | None = None,
+) -> Path:
     GENERATED_DIR.mkdir(parents=True, exist_ok=True)
-    output_path = GENERATED_DIR / f"{program}_G{plan.grade}_Tuan_{plan.week:02d}_draft.docx"
+    output_stem = filename_prefix or f"{program}_G{plan.grade}_Tuan_{plan.week:02d}_{safe_filename_part(lesson_title(plan))}"
+    output_path = GENERATED_DIR / f"{output_stem}.docx"
 
     document = create_document_from_template()
     apply_base_style(document)
@@ -603,95 +588,100 @@ def upload_generated_files(files: GeneratedLessonFiles, parent_id: str, week: in
     week_folder = get_existing_or_create_week_folder(client, parent_id, week)
     links: dict[str, str] = {}
 
-    uploaded_docx = client.upload_file(files.docx_path, week_folder["id"], DOCX_MIME_TYPE)
+    uploaded_docx = client.upload_file(files.docx_path, week_folder["id"], DOCX_MIME_TYPE, replace_existing=True)
     links["docx"] = uploaded_docx.get("webViewLink", "")
     print(f"Uploaded DOCX: {uploaded_docx.get('name')} | {uploaded_docx.get('id')} | {links['docx']}")
 
     if files.pdf_path:
-        uploaded_pdf = client.upload_file(files.pdf_path, week_folder["id"], PDF_MIME_TYPE)
+        uploaded_pdf = client.upload_file(files.pdf_path, week_folder["id"], PDF_MIME_TYPE, replace_existing=True)
         links["pdf"] = uploaded_pdf.get("webViewLink", "")
         print(f"Uploaded PDF: {uploaded_pdf.get('name')} | {uploaded_pdf.get('id')} | {links['pdf']}")
 
     return links
 
 
-def generate_tds_docx(grade: int, week: int, track: str, upload: bool = False, notify: bool = False) -> GeneratedLessonFiles:
+def render_single_lesson_files(
+    plan: TDSWeekPlan | MoetWeekPlan,
+    lesson: LessonItem,
+    index: int,
+    program: str,
+) -> GeneratedLessonFiles:
+    one_lesson_plan = single_lesson_plan(plan, lesson)
+    title = lesson.content.strip() or f"Bài {index:02d}"
+    filename_prefix = lesson_filename_prefix(lesson, index)
+    lesson_text = generate_lesson_text(one_lesson_plan, program)
+
+    if web_render_enabled():
+        rendered_files = render_lesson_files_with_web(
+            title=title,
+            content=lesson_text,
+            output_dir=GENERATED_DIR,
+            grade=plan.grade,
+            week=plan.week,
+            program=program,
+            lesson_name=title,
+            filename_prefix=filename_prefix,
+        )
+        docx_path = rendered_files.docx_path
+        pdf_path = rendered_files.pdf_path
+    else:
+        docx_path = build_docx(one_lesson_plan, lesson_text, program, filename_prefix)
+        pdf_path = render_pdf(one_lesson_plan, lesson_text, program, filename_prefix)
+
+    print(f"Generated standard lesson DOCX: {docx_path}")
+    print(f"Generated standard lesson PDF: {pdf_path}")
+    return GeneratedLessonFiles(docx_path=docx_path, pdf_path=pdf_path, lesson_title=title)
+
+
+
+def generate_lesson_batch(
+    plan: TDSWeekPlan | MoetWeekPlan,
+    program: str,
+    parent_id: str,
+    upload: bool = False,
+    notify: bool = False,
+) -> GeneratedLessonBatch:
+    if not plan.lessons:
+        raise RuntimeError(f"Không tìm thấy bài học PPCT cho {program} G{plan.grade} tuần {plan.week:02d}.")
+
+    generated_items = [
+        render_single_lesson_files(plan, lesson, index, program)
+        for index, lesson in enumerate(plan.lessons, start=1)
+    ]
+
+    if upload:
+        generated_items = [
+            replace(files, uploaded_links=upload_generated_files(files, parent_id, plan.week))
+            for files in generated_items
+        ]
+
+    batch = GeneratedLessonBatch(items=generated_items)
+    if notify:
+        message_lines = [
+            f"Đã tạo giáo án chuẩn {program} G{plan.grade} tuần {plan.week:02d}: {len(batch.items)} bài riêng biệt.",
+        ]
+        for item in batch.items:
+            message_lines.append(f"- {item.docx_path.name}")
+            if item.uploaded_links:
+                for label, link in item.uploaded_links.items():
+                    if link:
+                        message_lines.append(f"  {label.upper()}: {link}")
+        build_notifier().send_message("\n".join(message_lines))
+        print("Telegram notification sent.")
+
+    return batch
+
+
+
+def generate_tds_docx(grade: int, week: int, track: str, upload: bool = False, notify: bool = False) -> GeneratedLessonBatch:
     plan = extract_tds_week(TDS_EXCEL_PATH, grade, week, track)
-    lesson_text = generate_lesson_text(plan, "TDS")
-    title = lesson_title(plan)
-    if web_render_enabled():
-        files = render_lesson_files_with_web(
-            title=title,
-            content=lesson_text,
-            output_dir=GENERATED_DIR,
-            grade=plan.grade,
-            week=plan.week,
-            program="TDS",
-            lesson_name=title,
-            filename_prefix=f"TDS_G{plan.grade}_Tuan_{plan.week:02d}_web",
-        )
-        docx_path = files.docx_path
-        pdf_path = files.pdf_path
-    else:
-        docx_path = build_docx(plan, lesson_text, "TDS")
-        pdf_path = render_pdf(plan, lesson_text, "TDS")
-    files = GeneratedLessonFiles(docx_path=docx_path, pdf_path=pdf_path)
-    print(f"Generated DOCX: {docx_path}")
-    print(f"Generated PDF: {pdf_path}")
-
-    uploaded_links: dict[str, str] = {}
-    if upload:
-        uploaded_links = upload_generated_files(files, tds_grade_output_folder_id(grade), week)
-
-    if notify:
-        message = f"Đã tạo giáo án nháp TDS G{grade} tuần {week:02d}: {docx_path.name} và {pdf_path.name}"
-        for label, link in uploaded_links.items():
-            if link:
-                message += f"\n{label.upper()}: {link}"
-        build_notifier().send_message(message)
-        print("Telegram notification sent.")
-
-    return files
+    return generate_lesson_batch(plan, "TDS", tds_grade_output_folder_id(grade), upload, notify)
 
 
-def generate_moet_docx(grade: int, week: int, upload: bool = False, notify: bool = False) -> GeneratedLessonFiles:
+
+def generate_moet_docx(grade: int, week: int, upload: bool = False, notify: bool = False) -> GeneratedLessonBatch:
     plan = extract_moet_week(grade, week)
-    lesson_text = generate_lesson_text(plan, "MOET")
-    title = lesson_title(plan)
-    if web_render_enabled():
-        files = render_lesson_files_with_web(
-            title=title,
-            content=lesson_text,
-            output_dir=GENERATED_DIR,
-            grade=plan.grade,
-            week=plan.week,
-            program="MOET",
-            lesson_name=title,
-            filename_prefix=f"MOET_G{plan.grade}_Tuan_{plan.week:02d}_web",
-        )
-        docx_path = files.docx_path
-        pdf_path = files.pdf_path
-    else:
-        docx_path = build_docx(plan, lesson_text, "MOET")
-        pdf_path = render_pdf(plan, lesson_text, "MOET")
-    files = GeneratedLessonFiles(docx_path=docx_path, pdf_path=pdf_path)
-    print(f"Generated DOCX: {docx_path}")
-    print(f"Generated PDF: {pdf_path}")
-
-    uploaded_links: dict[str, str] = {}
-    if upload:
-        uploaded_links = upload_generated_files(files, moet_grade_output_folder_id(grade), week)
-
-    if notify:
-        message = f"Đã tạo giáo án nháp MOET G{grade} tuần {week:02d}: {docx_path.name} và {pdf_path.name}"
-        for label, link in uploaded_links.items():
-            if link:
-                message += f"\n{label.upper()}: {link}"
-        build_notifier().send_message(message)
-        print("Telegram notification sent.")
-
-    return files
-
+    return generate_lesson_batch(plan, "MOET", moet_grade_output_folder_id(grade), upload, notify)
 
 def selected_programs(include_tds: bool, include_moet: bool) -> list[str]:
     programs: list[str] = []

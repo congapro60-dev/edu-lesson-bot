@@ -126,9 +126,15 @@ def build_lesson_html(plan: TDSWeekPlan | MoetWeekPlan, lesson_text: str, progra
 </html>"""
 
 
-def render_pdf(plan: TDSWeekPlan | MoetWeekPlan, lesson_text: str, program: str) -> Path:
+def render_pdf(
+    plan: TDSWeekPlan | MoetWeekPlan,
+    lesson_text: str,
+    program: str,
+    filename_prefix: str | None = None,
+) -> Path:
     GENERATED_DIR.mkdir(parents=True, exist_ok=True)
-    output_path = GENERATED_DIR / f"{program}_G{plan.grade}_Tuan_{plan.week:02d}_draft.pdf"
+    output_stem = filename_prefix or f"{program}_G{plan.grade}_Tuan_{plan.week:02d}"
+    output_path = GENERATED_DIR / f"{output_stem}.pdf"
     html_content = build_lesson_html(plan, lesson_text, program)
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)

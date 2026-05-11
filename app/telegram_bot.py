@@ -11,7 +11,7 @@ import requests
 from app.config import load_settings, require_values
 from app.drive_audit import WeekAudit, audit_week, format_week_audit
 from app.drive_client import GoogleDriveClient
-from app.lesson_generator import GeneratedLessonFiles, generate_moet_docx, generate_tds_docx
+from app.lesson_generator import GeneratedLessonBatch, generate_moet_docx, generate_tds_docx
 from app.telegram_notify import build_notifier
 
 
@@ -201,29 +201,42 @@ def find_uploaded_file_link(audit: WeekAudit, filename: str) -> str:
     return ""
 
 
-def format_generation_result(command: BotCommand, generated_files: GeneratedLessonFiles) -> str:
+def format_generation_result(command: BotCommand, generated_files: GeneratedLessonBatch) -> str:
     audit = audit_week(command.program, command.grade, command.week)
     folder_link = audit_folder_link(audit)
-    docx_link = find_uploaded_file_link(audit, generated_files.docx_path.name)
-    pdf_link = find_uploaded_file_link(audit, generated_files.pdf_path.name) if generated_files.pdf_path else ""
 
     lines = [
         f"Đã soạn và upload giáo án {command.program.upper()} G{command.grade} tuần {command.week:02d}.",
-        f"File DOCX local: {generated_files.docx_path.name}",
+        f"Đã tạo {len(generated_files.items)} bài riêng biệt theo PPCT; mỗi bài có 1 file DOCX và 1 file PDF.",
+        f"Thư mục chứa file: {audit.folder_name or 'Chưa xác định'}",
     ]
-    if generated_files.pdf_path:
-        lines.append(f"File PDF local: {generated_files.pdf_path.name}")
-    lines.append(f"Thư mục chứa file: {audit.folder_name or 'Chưa xác định'}")
     if folder_link:
         lines.append(f"Link thư mục: {folder_link}")
-    if docx_link:
-        lines.append(f"Link DOCX: {docx_link}")
-    else:
-        lines.append("Link DOCX: chưa tìm thấy trong lần kiểm tra lại Drive; hãy mở thư mục tuần ở trên để kiểm tra file vừa upload.")
-    if pdf_link:
-        lines.append(f"Link PDF: {pdf_link}")
-    elif generated_files.pdf_path:
-        lines.append("Link PDF: chưa tìm thấy trong lần kiểm tra lại Drive; hãy mở thư mục tuần ở trên để kiểm tra file PDF vừa upload.")
+
+    for index, item in enumerate(generated_files.items, start=1):
+        docx_link = find_uploaded_file_link(audit, item.docx_path.name)
+        pdf_link = find_uploaded_file_link(audit, item.pdf_path.name) if item.pdf_path else ""
+        lines.extend([
+            "",
+            f"Bài {index}: {item.lesson_title or item.docx_path.stem}",
+            f"- DOCX: {item.docx_path.name}",
+        ])
+        if docx_link:
+            lines.append(f"  Link DOCX: {docx_link}")
+        elif item.uploaded_links and item.uploaded_links.get("docx"):
+            lines.append(f"  Link DOCX: {item.uploaded_links['docx']}")
+        else:
+            lines.append("  Link DOCX: chưa tìm thấy khi kiểm tra lại Drive; hãy mở thư mục tuần ở trên để kiểm tra file vừa upload.")
+
+        if item.pdf_path:
+            lines.append(f"- PDF: {item.pdf_path.name}")
+            if pdf_link:
+                lines.append(f"  Link PDF: {pdf_link}")
+            elif item.uploaded_links and item.uploaded_links.get("pdf"):
+                lines.append(f"  Link PDF: {item.uploaded_links['pdf']}")
+            else:
+                lines.append("  Link PDF: chưa tìm thấy khi kiểm tra lại Drive; hãy mở thư mục tuần ở trên để kiểm tra file PDF vừa upload.")
+
     lines.extend([
         "",
         "Kiểm tra nhanh sau khi upload:",
