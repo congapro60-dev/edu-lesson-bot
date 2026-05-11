@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -15,6 +16,16 @@ from app.config import load_settings
 from app.drive_client import GoogleDriveClient
 
 app = FastAPI(title="Lesson Bot API", docs_url=None, redoc_url=None)
+
+# Allow the soangiaoan web app (any origin) to call these endpoints from the browser.
+# Auth is handled via X-API-Token header, not cookies, so allow_credentials=False is correct.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["X-API-Token", "Content-Type"],
+)
 
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 PDF_MIME = "application/pdf"
@@ -38,7 +49,6 @@ def verify_token(x_api_token: Annotated[str | None, Header()] = None) -> None:
     expected = os.getenv("WEB_API_TOKEN", "").strip()
     if not expected:
         raise HTTPException(status_code=500, detail="WEB_API_TOKEN not configured on server")
-    # constant-time comparison to prevent timing attacks
     if not hmac.compare_digest(x_api_token or "", expected):
         raise HTTPException(status_code=401, detail="Invalid or missing X-API-Token")
 
