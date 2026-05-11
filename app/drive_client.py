@@ -126,6 +126,20 @@ class GoogleDriveClient:
             return existing
         return self.create_folder(name=name, parent_id=parent_id)
 
+    def find_week_folder(self, parent_id: str, week: int) -> dict[str, Any] | None:
+        """Find week folder, handling both 'Tuần 1' and 'Tuần 01' naming variants."""
+        for name in (f"Tuần {week:02d}", f"Tuần {week}"):
+            folder = self.find_child_folder(parent_id, name)
+            if folder:
+                return folder
+        return None
+
+    def get_or_create_week_folder(self, parent_id: str, week: int) -> dict[str, Any]:
+        existing = self.find_week_folder(parent_id, week)
+        if existing:
+            return existing
+        return self.create_folder(f"Tuần {week:02d}", parent_id)
+
     def find_child_file(self, parent_id: str, name: str) -> dict[str, Any] | None:
         escaped_name = name.replace("'", "\\'")
         query = (
@@ -184,6 +198,30 @@ class GoogleDriveClient:
             )
             .execute()
         )
+
+    def upload_to_week_folder(
+        self,
+        local_path: Path,
+        root_folder_id: str,
+        week: int,
+        mime_type: str | None = None,
+        replace_existing: bool = False,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Upload file to week sub-folder. Returns (file_result, folder_metadata).
+
+        Raises FileExistsError(filename) if file exists and replace_existing=False.
+        """
+        folder = self.get_or_create_week_folder(root_folder_id, week)
+        folder_id = folder["id"]
+
+        existing = self.find_child_file(folder_id, local_path.name)
+        if existing:
+            if not replace_existing:
+                raise FileExistsError(local_path.name)
+            self.trash_file(existing["id"])
+
+        file_result = self.upload_file(local_path, folder_id, mime_type=mime_type, replace_existing=False)
+        return file_result, folder
 
 
 def test_drive_connection() -> None:
