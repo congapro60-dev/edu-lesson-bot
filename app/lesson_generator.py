@@ -400,7 +400,12 @@ def limit_filename_stem(stem: str, max_length: int = 150) -> str:
 
 
 def lesson_filename_prefix(lesson: LessonItem, index: int) -> str:
-    content = safe_filename_part(lesson.content, f"Bài {index:02d}")
+    raw = lesson.content.strip()
+    # Strip objectives text after " - HS/GV/Học sinh/yêu cầu..." — keep only lesson title
+    title = re.split(r'\s*[-–—]\s*(?:HS|GV|Học sinh|yêu cầu|Nắm|nắm|Biết|biết|Hiểu|hiểu)', raw, maxsplit=1)[0].strip()
+    # Remove "(tiết X)" suffix from title
+    title = re.sub(r'\s*\([Tt]iết\s*\d+\)', '', title).strip()
+    content = safe_filename_part(title or raw, f"Bài {index:02d}")
     period = safe_filename_part(lesson.period, "")
     if period:
         return limit_filename_stem(f"Tiết {period} - {content}")
