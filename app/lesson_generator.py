@@ -736,7 +736,12 @@ def render_single_lesson_files(
     program: str,
 ) -> GeneratedLessonFiles:
     one_lesson_plan = single_lesson_plan(plan, lesson)
-    title = lesson.content.strip() or f"Bài {index:02d}"
+    # lesson.content chứa toàn bộ text PPCT (tiêu đề + yêu cầu cần đạt + tên tiết khác).
+    # Chỉ lấy phần tiêu đề trước " - HS/GV..." làm title tài liệu.
+    _raw = lesson.content.strip()
+    _short = re.split(r'\s*[-–—]\s*(?:HS|GV|Học sinh|yêu cầu|Nắm|nắm|Biết|biết|Hiểu|hiểu)', _raw, maxsplit=1)[0].strip()
+    _short = _short or f"Bài {index:02d}"
+    title = f"Tiết {lesson.period} - {_short}" if lesson.period else _short
     filename_prefix = lesson_filename_prefix(lesson, index)
     lesson_text = generate_lesson_text(one_lesson_plan, program)
 
