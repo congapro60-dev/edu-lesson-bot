@@ -1,6 +1,6 @@
 # HANDOFF — edu-lesson-bot
 
-**Cập nhật**: 2026-05-11
+**Cập nhật**: 2026-05-12
 **Mục đích**: Session mới đọc file này trước khi làm bất kỳ thứ gì.
 
 ---
@@ -15,11 +15,18 @@
 
 ## 2. Những gì đã làm xong
 
-### Session 2026-05-11 (session hiện tại)
+### Session 2026-05-12 (session hiện tại)
 
 | Thay đổi | File | Mô tả |
 |------------|------|-------|
-| Đồng bộ prompt bot với web | `app/lesson_generator.py` | Thay prompt TDS 4 bước bằng CLAUDE_FORMAT giống web: WALT/WILF + Danielson + 5 HĐ + 3 mức ἳ6️ |
+| Rút gọn tên file giáo án | `app/lesson_generator.py` | `lesson_filename_prefix()` chỉ lấy tên bài (trước " - HS/GV..."), bỏ yêu cầu cần đạt + "(tiết X)" |
+| Force web pipeline | `app/lesson_generator.py` | `render_single_lesson_files()` raise RuntimeError nếu `WEB_WORD_RENDER_URL` chưa set, bỏ fallback local renderer |
+
+### Session 2026-05-11
+
+| Thay đổi | File | Mô tả |
+|------------|------|-------|
+| Đồng bộ prompt bot với web | `app/lesson_generator.py` | Thay prompt TDS 4 bước bằng CLAUDE_FORMAT giống web: WALT/WILF + Danielson + 5 HĐ + 3 mức 🌶️ |
 | max_tokens tăng | `app/lesson_generator.py` | 10000 → 16000 |
 | XML extraction | `app/lesson_generator.py` | Parse `<lesson_content>` tag, fallback bỏ `<thinking>` |
 | FastAPI server | `app/bot_api_server.py` | `POST /api/lessons/check` + `POST /api/drive/upload` + `/health` |
@@ -95,7 +102,15 @@ Web (React)
 
 ---
 
-## 6. Lỗi thường gặp
+## 6. Biến môi trường bổ sung (proxy Claude)
+
+| Biến | Giá trị | Mô tả |
+|------|---------|-------|
+| `ANTHROPIC_BASE_URL` | `https://digishop-api.io.vn` | Proxy — KHÔNG có `/v1` ở cuối |
+| `CLAUDE_MODEL` | `claude-sonnet-4-6` | Model name proxy nhận (không dùng shorthand) |
+| `WEB_WORD_RENDER_URL` | `https://<vercel>.vercel.app/api/render-word` | BẮT BUỘC — bot raise lỗi nếu thiếu |
+
+## 7. Lỗi thường gặp
 
 | Lỗi | Nguyên nhân | Xử lý |
 |------|------------|-------|
@@ -103,6 +118,10 @@ Web (React)
 | `400 Drive folder not configured` | Thiếu `TDS_G1X_FOLDER_ID` | Thêm biến môi trường |
 | `409 '...' đã tồn tại` | File trùng tên | Bấm "Ghi đè" trong modal web |
 | `500 Google credentials` | Thiếu OAuth token | Cấu hình `GOOGLE_TOKEN_JSON` + `GOOGLE_CREDENTIALS_JSON` |
+| `401 invalid x-api-key` | Sai key hoặc thiếu `ANTHROPIC_BASE_URL` | Set `ANTHROPIC_BASE_URL=https://digishop-api.io.vn` |
+| `404 /v1/v1/messages` | `ANTHROPIC_BASE_URL` có trailing `/v1` | Bỏ `/v1` khỏi base URL |
+| `403 model not accessible` | Dùng shorthand model | Set `CLAUDE_MODEL=claude-sonnet-4-6` |
+| `RuntimeError: WEB_WORD_RENDER_URL chưa được cấu hình` | Thiếu env var | Set `WEB_WORD_RENDER_URL` trên Railway |
 
 ---
 
