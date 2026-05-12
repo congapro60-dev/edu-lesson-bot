@@ -33,6 +33,7 @@
 | upload_to_week_folder | `app/drive_client.py` | Helper: tìm/tạo folder tuần + check conflict + upload |
 | requirements.txt | `requirements.txt` | `fastapi`, `uvicorn[standard]`, `python-multipart`, `anthropic` |
 | main.py | `app/main.py` | Start FastAPI (thread) + Telegram bot (main thread) song song |
+| Force web pipeline | `app/lesson_generator.py` | `render_single_lesson_files()` BẮT BUỘC `WEB_WORD_RENDER_URL`. Bỏ fallback local renderer (gây lỗi DOCX bảng 1 ký tự + PDF LaTeX raw). Raise lỗi rõ nếu env var thiếu. |
 
 ---
 
