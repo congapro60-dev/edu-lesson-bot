@@ -23,7 +23,7 @@ from app.moet_parser import MoetWeekPlan, extract_moet_week
 from app.pdf_renderer import render_pdf
 from app.ppct_parser import TDS_EXCEL_PATH, LessonItem, TDSWeekPlan, extract_tds_week
 from app.telegram_notify import build_notifier
-from app.web_lesson_client import render_lesson_files_with_web, web_render_enabled
+from app.web_lesson_client import export_lesson_endpoint, render_lesson_files_with_web, web_render_enabled
 
 
 GENERATED_DIR = BASE_DIR / "outputs" / "generated"
@@ -735,22 +735,27 @@ def render_single_lesson_files(
     filename_prefix = lesson_filename_prefix(lesson, index)
     lesson_text = generate_lesson_text(one_lesson_plan, program)
 
-    if web_render_enabled():
-        rendered_files = render_lesson_files_with_web(
-            title=title,
-            content=lesson_text,
-            output_dir=GENERATED_DIR,
-            grade=plan.grade,
-            week=plan.week,
-            program=program,
-            lesson_name=title,
-            filename_prefix=filename_prefix,
+    if not web_render_enabled():
+        raise RuntimeError(
+            "WEB_WORD_RENDER_URL chưa được cấu hình trên Railway. "
+            "Bot bắt buộc dùng web pipeline để render LaTeX + bảng đúng. "
+            "Vào Railway → Variables → set WEB_WORD_RENDER_URL=https://<vercel>.vercel.app/api/render-word."
         )
-        docx_path = rendered_files.docx_path
-        pdf_path = rendered_files.pdf_path
-    else:
-        docx_path = build_docx(one_lesson_plan, lesson_text, program, filename_prefix)
-        pdf_path = render_pdf(one_lesson_plan, lesson_text, program, filename_prefix)
+
+    endpoint = export_lesson_endpoint()
+    print(f"Rendering via web pipeline: {endpoint}")
+    rendered_files = render_lesson_files_with_web(
+        title=title,
+        content=lesson_text,
+        output_dir=GENERATED_DIR,
+        grade=plan.grade,
+        week=plan.week,
+        program=program,
+        lesson_name=title,
+        filename_prefix=filename_prefix,
+    )
+    docx_path = rendered_files.docx_path
+    pdf_path = rendered_files.pdf_path
 
     print(f"Generated standard lesson DOCX: {docx_path}")
     print(f"Generated standard lesson PDF: {pdf_path}")
