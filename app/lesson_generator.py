@@ -3,6 +3,9 @@ from __future__ import annotations
 import argparse
 import re
 import unicodedata
+from urllib.parse import quote
+
+import requests
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -245,26 +248,160 @@ def build_lesson_prompt(plan: TDSWeekPlan | MoetWeekPlan, program: str = "TDS") 
     )
 
 
-def generate_lesson_text(plan: TDSWeekPlan | MoetWeekPlan, program: str = "TDS") -> str:
+def _openai_compatible_chat_url(base_url: str) -> str:
+    normalized = base_url.rstrip("/")
+    if normalized.endswith("/chat/completions"):
+        return normalized
+    if normalized.endswith("/v1"):
+        return f"{normalized}/chat/completions"
+    return f"{normalized}/v1/chat/completions"
+
+
+def _generate_lesson_text_openai_chat(
+    *,
+    base_url: str,
+    api_key: str,
+    model: str,
+    prompt: str,
+    provider_label: str = "OpenAI-compatible",
+    max_tokens: int = 16000,
+) -> str:
+    response = requests.post(
+        _openai_compatible_chat_url(base_url),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": model,
+            "messages": [
+                {"role": "system", "content": LESSON_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            "max_tokens": max_tokens,
+        },
+        timeout=180,
+    )
+    if response.status_code >= 400:
+        raise RuntimeError(f"{provider_label} HTTP {response.status_code}: {response.text[:1000]}")
+
+    data = response.json()
+    try:
+        return str(data["choices"][0]["message"]["content"]).strip()
+    except (KeyError, IndexError, TypeError) as exc:
+        raise RuntimeError(f"{provider_label} trả về dữ liệu không hợp lệ: {data}") from exc
+
+
+def _generate_lesson_text_openai_compatible(plan: TDSWeekPlan | MoetWeekPlan, program: str) -> str:
+    settings = load_settings()
+    require_values(settings, ["openai_compatible_base_url", "openai_compatible_api_key", "openai_compatible_model"])
+
+    return _generate_lesson_text_openai_chat(
+        base_url=settings.openai_compatible_base_url,
+        api_key=settings.openai_compatible_api_key,
+        model=settings.openai_compatible_model,
+        prompt=build_lesson_prompt(plan, program),
+        provider_label="API hiện tại",
+    )
+
+
+def _generate_lesson_text_gemini(plan: TDSWeekPlan | MoetWeekPlan, program: str) -> str:
+    settings = load_settings()
+    require_values(settings, ["gemini_api_key", "gemini_model"])
+
+    model = quote(settings.gemini_model, safe="")
+    response = requests.post(
+        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+        params={"key": settings.gemini_api_key},
+        headers={"Content-Type": "application/json"},
+        json={
+            "systemInstruction": {"parts": [{"text": LESSON_SYSTEM_PROMPT}]},
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [{"text": build_lesson_prompt(plan, program)}],
+                }
+            ],
+            "generationConfig": {
+                "maxOutputTokens": 16000,
+                "temperature": 0.7,
+            },
+        },
+        timeout=180,
+    )
+    if response.status_code >= 400:
+        raise RuntimeError(f"Gemini HTTP {response.status_code}: {response.text[:1000]}")
+
+    data = response.json()
+    try:
+        parts = data["candidates"][0]["content"]["parts"]
+        return "\n".join(str(part.get("text", "")) for part in parts).strip()
+    except (KeyError, IndexError, TypeError) as exc:
+        raise RuntimeError(f"Gemini trả về dữ liệu không hợp lệ: {data}") from exc
+
+
+def _generate_lesson_text_deepseek(plan: TDSWeekPlan | MoetWeekPlan, program: str) -> str:
+    settings = load_settings()
+    require_values(settings, ["deepseek_base_url", "deepseek_api_key", "deepseek_model"])
+
+    return _generate_lesson_text_openai_chat(
+        base_url=settings.deepseek_base_url,
+        api_key=settings.deepseek_api_key,
+        model=settings.deepseek_model,
+        prompt=build_lesson_prompt(plan, program),
+        provider_label="DeepSeek backup",
+        max_tokens=8192,
+    )
+
+
+def _generate_lesson_text_anthropic(plan: TDSWeekPlan | MoetWeekPlan, program: str) -> str:
     settings = load_settings()
     require_values(settings, ["anthropic_api_key"])
     client = Anthropic(api_key=settings.anthropic_api_key)
-    try:
-        response = client.messages.create(
-            model=settings.claude_model,
-            max_tokens=16000,
-            system=LESSON_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": build_lesson_prompt(plan, program)}],
-        )
-    except Exception as exc:
-        raise RuntimeError(
-            "Không tạo được giáo án. API lỗi. "
-            f"Chi tiết: {exc}"
-        ) from exc
-
-    raw_text = "\n".join(
+    response = client.messages.create(
+        model=settings.claude_model,
+        max_tokens=16000,
+        system=LESSON_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": build_lesson_prompt(plan, program)}],
+    )
+    return "\n".join(
         block.text for block in response.content if getattr(block, "type", "") == "text"
     ).strip()
+
+
+def _primary_ai_call(plan: TDSWeekPlan | MoetWeekPlan, program: str) -> str:
+    settings = load_settings()
+    if settings.ai_provider == "openai_compatible":
+        return _generate_lesson_text_openai_compatible(plan, program)
+    if settings.ai_provider == "gemini":
+        return _generate_lesson_text_gemini(plan, program)
+    if settings.ai_provider == "deepseek":
+        return _generate_lesson_text_deepseek(plan, program)
+    return _generate_lesson_text_anthropic(plan, program)
+
+
+def generate_lesson_text(plan: TDSWeekPlan | MoetWeekPlan, program: str = "TDS") -> str:
+    attempts: list[tuple[str, object]] = [
+        ("API hiện tại", lambda: _primary_ai_call(plan, program)),
+        ("Gemini backup", lambda: _generate_lesson_text_gemini(plan, program)),
+        ("DeepSeek backup", lambda: _generate_lesson_text_deepseek(plan, program)),
+    ]
+    errors: list[str] = []
+    raw_text = ""
+
+    for label, generator in attempts:
+        try:
+            raw_text = generator()
+            if raw_text:
+                break
+            errors.append(f"{label}: API trả về nội dung rỗng")
+        except Exception as exc:
+            errors.append(f"{label}: {exc}")
+    else:
+        raise RuntimeError(
+            "Không tạo được giáo án. Tất cả API đều lỗi theo thứ tự API hiện tại → Gemini → DeepSeek. "
+            f"Chi tiết: {' | '.join(errors)}"
+        )
 
     # Trích xuất <lesson_content> — giống hàm extractLessonContent() trên web
     content_match = re.search(r"<lesson_content>([\s\S]*?)</lesson_content>", raw_text, re.IGNORECASE)

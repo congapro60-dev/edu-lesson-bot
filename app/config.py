@@ -16,6 +16,15 @@ class Settings:
     anthropic_api_key: str
     claude_model: str
     web_word_render_url: str
+    ai_provider: str
+    openai_compatible_base_url: str
+    openai_compatible_api_key: str
+    openai_compatible_model: str
+    gemini_api_key: str
+    gemini_model: str
+    deepseek_base_url: str
+    deepseek_api_key: str
+    deepseek_model: str
     telegram_bot_token: str
     telegram_chat_id: str
     google_credentials_file: Path
@@ -41,7 +50,10 @@ class Settings:
 
 
 def _getenv(name: str, default: str = "") -> str:
-    return os.getenv(name, default).strip()
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return default
+    return value.strip()
 
 
 def load_settings() -> Settings:
@@ -49,6 +61,15 @@ def load_settings() -> Settings:
         anthropic_api_key=_getenv("ANTHROPIC_API_KEY"),
         claude_model=_getenv("CLAUDE_MODEL", "claude-sonnet-4-5"),
         web_word_render_url=_getenv("WEB_WORD_RENDER_URL"),
+        ai_provider=_getenv("AI_PROVIDER", "anthropic").lower(),
+        openai_compatible_base_url=_getenv("OPENAI_COMPATIBLE_BASE_URL"),
+        openai_compatible_api_key=_getenv("OPENAI_COMPATIBLE_API_KEY"),
+        openai_compatible_model=_getenv("OPENAI_COMPATIBLE_MODEL"),
+        gemini_api_key=_getenv("GEMINI_API_KEY"),
+        gemini_model=_getenv("GEMINI_MODEL", "gemini-3.5-flash"),
+        deepseek_base_url=_getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+        deepseek_api_key=_getenv("DEEPSEEK_API_KEY"),
+        deepseek_model=_getenv("DEEPSEEK_MODEL", "deepseek-chat"),
         telegram_bot_token=_getenv("TELEGRAM_BOT_TOKEN"),
         telegram_chat_id=_getenv("TELEGRAM_CHAT_ID"),
         google_credentials_file=BASE_DIR / _getenv("GOOGLE_CREDENTIALS_FILE", "credentials/google_credentials.json"),
