@@ -174,4 +174,3 @@ class ZaloOAClient:
         if response.status_code >= 400 or (api_error not in (0, "0", None)):
             raise ZaloClientError("Zalo OpenAPI từ chối yêu cầu", code="ZALO_API_ERROR", status_code=response.status_code)
         return result
-

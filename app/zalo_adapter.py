@@ -150,5 +150,3 @@ def register_zalo_webhook(app: Any, adapter: ZaloAdapter) -> None:
             status = 401 if exc.code == "UNAUTHORIZED_WEBHOOK" else 400
             return JSONResponse({"ok": False, "code": exc.code}, status_code=status)
         return JSONResponse({"ok": True})
-
-
