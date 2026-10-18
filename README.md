@@ -95,6 +95,47 @@ cd lesson-bot && set PYTHONIOENCODING=utf-8 && .venv\Scripts\python.exe -m app.l
 - The safer `--missing` mode skips partially filled weeks unless `--partial-weeks` is explicitly provided.
 - If the AI API call fails, the generator creates a structured fallback draft instead of stopping the workflow.
 
+## SmartPlan Assistant gateway client
+
+`app.assistant_client.AssistantClient` is the server-side bridge to the SmartPlan Assistant gateway. It sends JSON requests to `SMARTPLAN_ASSISTANT_URL` and requires these identity fields on every request:
+
+```json
+{
+  "channel": "telegram",
+  "channelAccountId": "<OA or bot account ID>",
+  "channelUserId": "<channel-scoped user ID>",
+  "channelChatId": "<optional chat ID>"
+}
+```
+
+The request body also contains `action` and a generated `requestId` (or the caller's explicit id). The client serializes the body as compact, UTF-8 JSON with sorted keys. It signs the exact bytes with HMAC-SHA256 using `SMARTPLAN_ASSISTANT_SECRET` and this signing string:
+
+```text
+<unix_timestamp>.<nonce>.<raw_json_body>.smartplan-assistant
+```
+
+It sends the hexadecimal signature in `X-Assistant-Signature`, with the timestamp in `X-Assistant-Timestamp` and nonce in `X-Assistant-Nonce`. Supported actions are `prepareConfirmation`, `confirm`, `cancel`, and `jobStatus`:
+
+- `prepareConfirmation`: stable caller-supplied `requestId` plus `toolName`, `args`, `preview`, `resourceIds`, `resourceScopes`, optional `recipients`; retries must reuse the same ID.
+- `confirm` / `cancel`: `confirmationId`, `requestHash`.
+- `jobStatus`: `jobId`.
+
+`wait_for_job()` polls until `succeeded`, `failed`, or `cancelled`, then raises `JOB_POLL_TIMEOUT` when the poll limit is reached. The default timeout is 20 seconds per request and the default poll interval is 2 seconds; override them with the two numeric environment variables.
+
+## Channel adapters
+
+The bot now exposes `POST /api/zalo/webhook` when `app.main --run` starts. `ZaloAdapter` accepts signed inbound text events only when the event OA ID equals `ZALO_OA_ID` and is present in `ZALO_OA_ALLOWED_IDS`. It verifies `X-ZEVENT-SIGNATURE` (HMAC-SHA256 over the exact raw body), requires a fresh provider event ID/timestamp, claims the event in the SQLite replay store, normalizes the OA ID plus OA-scoped Zalo UID, and replies through `https://openapi.zalo.me/v3.0/oa/message/cs` using the server-only access token.
+
+Supported reactive Zalo commands: `/link CODE`, `/confirm ID HASH`, `/cancel ID HASH`, `/status JOB_ID`, `/help`. Other text is sent to the shared `chat` gateway action. No startup or proactive Zalo message is sent. Errors never include access tokens, webhook secrets, or response bodies.
+
+Telegram keeps the existing TDS/MOET parser. In private chats only, `/link`, `/confirm`, `/cancel`, `/status`, `/unlink`, and non-legacy natural language can route to the Assistant gateway when `TELEGRAM_ACCOUNT_ID` and the SmartPlan Assistant settings are present. `/unlink` points the teacher to SmartPlan because channel unlink requires the authenticated web flow. Group chats are rejected for Assistant routing. Duplicate/edited assistant messages are ignored, transport errors are normalized, and assistant replies redact private URLs, PINs, tokens, and submission markers.
+
+Keep `SMARTPLAN_ASSISTANT_SECRET` only in the Railway/server environment or a local `.env` that is excluded from Git. Do not put it in browser settings, client bundles, Telegram messages, logs, request previews, or committed files. Rotate the secret at the gateway and bot together. Run the contract tests without external calls:
+
+```text
+python -m unittest discover -s tests -p "test_*.py" -v
+```
+
 ## Do not commit secrets
 
 Never commit `.env`, Google credential files, OAuth token files, generated DOCX outputs, or API keys.

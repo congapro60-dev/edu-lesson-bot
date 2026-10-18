@@ -27,6 +27,18 @@ class Settings:
     deepseek_model: str
     telegram_bot_token: str
     telegram_chat_id: str
+    smartplan_assistant_url: str
+    smartplan_assistant_secret: str
+    smartplan_assistant_timeout_seconds: float
+    smartplan_assistant_poll_interval_seconds: float
+    telegram_account_id: str
+    zalo_oa_id: str
+    zalo_oa_allowed_ids: str
+    zalo_oa_access_token: str
+    zalo_oa_webhook_secret: str
+    zalo_openapi_base_url: str
+    zalo_webhook_replay_db: Path
+    zalo_webhook_max_age_seconds: float
     google_credentials_file: Path
     google_token_file: Path
     drive_folder_lich_bao_giang: str
@@ -56,6 +68,19 @@ def _getenv(name: str, default: str = "") -> str:
     return value.strip()
 
 
+def _getenv_float(name: str, default: float) -> float:
+    raw = _getenv(name)
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"Invalid numeric configuration: {name}") from exc
+    if value <= 0:
+        raise RuntimeError(f"Configuration must be positive: {name}")
+    return value
+
+
 def load_settings() -> Settings:
     return Settings(
         anthropic_api_key=_getenv("ANTHROPIC_API_KEY"),
@@ -72,6 +97,18 @@ def load_settings() -> Settings:
         deepseek_model=_getenv("DEEPSEEK_MODEL", "deepseek-chat"),
         telegram_bot_token=_getenv("TELEGRAM_BOT_TOKEN"),
         telegram_chat_id=_getenv("TELEGRAM_CHAT_ID"),
+        smartplan_assistant_url=_getenv("SMARTPLAN_ASSISTANT_URL"),
+        smartplan_assistant_secret=_getenv("SMARTPLAN_ASSISTANT_SECRET"),
+        smartplan_assistant_timeout_seconds=_getenv_float("SMARTPLAN_ASSISTANT_TIMEOUT_SECONDS", 20.0),
+        smartplan_assistant_poll_interval_seconds=_getenv_float("SMARTPLAN_ASSISTANT_POLL_INTERVAL_SECONDS", 2.0),
+        telegram_account_id=_getenv("TELEGRAM_ACCOUNT_ID"),
+        zalo_oa_id=_getenv("ZALO_OA_ID"),
+        zalo_oa_allowed_ids=_getenv("ZALO_OA_ALLOWED_IDS"),
+        zalo_oa_access_token=_getenv("ZALO_OA_ACCESS_TOKEN"),
+        zalo_oa_webhook_secret=_getenv("ZALO_OA_WEBHOOK_SECRET", _getenv("ZALO_OA_SECRET_KEY")),
+        zalo_openapi_base_url=_getenv("ZALO_OPENAPI_BASE_URL", "https://openapi.zalo.me"),
+        zalo_webhook_replay_db=BASE_DIR / _getenv("ZALO_WEBHOOK_REPLAY_DB", "outputs/zalo_webhook_replay.sqlite3"),
+        zalo_webhook_max_age_seconds=_getenv_float("ZALO_WEBHOOK_MAX_AGE_SECONDS", 300.0),
         google_credentials_file=BASE_DIR / _getenv("GOOGLE_CREDENTIALS_FILE", "credentials/google_credentials.json"),
         google_token_file=BASE_DIR / _getenv("GOOGLE_TOKEN_FILE", "credentials/google_token.json"),
         drive_folder_lich_bao_giang=_getenv("DRIVE_FOLDER_LICH_BAO_GIANG"),

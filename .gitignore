@@ -8,3 +8,4 @@ outputs/**/*.pdf
 outputs/**/*.xlsx
 outputs/**/*.xls
 outputs/**/*.tmp
+outputs/**/*.sqlite3

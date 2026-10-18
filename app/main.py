@@ -7,12 +7,15 @@ import threading
 import uvicorn
 
 from app.bot_api_server import app as fastapi_app
+from app.config import load_settings
 from app.telegram_bot import TelegramPollingBot
+from app.zalo_adapter import ZaloAdapter, register_zalo_webhook
 
 
 def _run_api_server() -> None:
     # Railway injects PORT; fall back to API_PORT or 8000
     port = int(os.getenv("PORT", os.getenv("API_PORT", "8000")))
+    register_zalo_webhook(fastapi_app, ZaloAdapter(load_settings()))
     uvicorn.run(fastapi_app, host="0.0.0.0", port=port, log_level="info")
 
 
