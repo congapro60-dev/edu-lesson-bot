@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import re
 import time
 import unicodedata
@@ -9,6 +10,7 @@ from dataclasses import dataclass, replace
 import requests
 
 from app.config import load_settings, require_values
+from app.assistant_client import AssistantClient, AssistantClientError, AssistantIdentity, redact_assistant_text
 from app.drive_audit import WeekAudit, audit_week, format_week_audit
 from app.drive_client import GoogleDriveClient
 from app.lesson_generator import (
@@ -89,11 +91,63 @@ Bạn có thể nhắn tự nhiên, ví dụ:
 
 Nếu câu lệnh chưa đủ thông tin, bot sẽ hỏi lại đúng phần còn thiếu.
 Cần xác định đủ 4 ý: kiểm tra hay soạn, hệ TDS/MOET, lớp 10/11/12, tuần số mấy.
+
+Trợ lý SmartPlan (chat riêng đã liên kết):
+- /link CODE — liên kết tài khoản
+- /unlink — mở SmartPlan để hủy liên kết
+- /confirm ID HASH — xác nhận một yêu cầu
+- /cancel ID HASH — hủy một yêu cầu
+- /status JOB_ID — xem trạng thái công việc
 """
 
 
 ACTION_LABELS = {"audit": "kiểm tra Drive", "generate": "soạn và upload giáo án"}
 PROGRAM_LABELS = {"tds": "TDS", "moet": "MOET"}
+
+
+@dataclass(frozen=True)
+class AssistantCommand:
+    action: str
+    args: tuple[str, ...] = ()
+
+
+def parse_assistant_command(message: str) -> AssistantCommand | None:
+    parts = message.strip().split()
+    if not parts or not parts[0].startswith("/"):
+        return None
+    action = parts[0].lower().split("@", 1)[0]
+    if action in {"/link", "/unlink", "/confirm", "/cancel", "/status"}:
+        return AssistantCommand(action[1:], tuple(parts[1:]))
+    return None
+
+
+def _safe_assistant_result(response: dict) -> str:
+    result = response.get("result")
+    if isinstance(result, dict):
+        if result.get("linked") is True:
+            return "Đã liên kết tài khoản Telegram với SmartPlan."
+        for key in ("answer", "text"):
+            value = result.get(key)
+            if isinstance(value, str) and value.strip():
+                return redact_assistant_text(value)
+        if isinstance(result.get("confirmationId"), str) and isinstance(result.get("requestHash"), str):
+            preview = redact_assistant_text(result.get("preview")) or "Yêu cầu cần xác nhận."
+            return f"{preview}\nDùng /confirm {result['confirmationId']} {result['requestHash']} để xác nhận, hoặc /cancel {result['confirmationId']} {result['requestHash']} để hủy."
+        if isinstance(result.get("status"), str):
+            progress = result.get("progress")
+            suffix = f" ({progress}%)" if isinstance(progress, (int, float)) else ""
+            return f"Trạng thái công việc: {result['status']}{suffix}."
+    return "Đã xử lý yêu cầu trợ lý."
+
+
+def _safe_assistant_error(error: AssistantClientError) -> str:
+    if error.code in {"ASSISTANT_NOT_CONFIGURED", "ASSISTANT_UNAVAILABLE"}:
+        return "Trợ lý hiện chưa sẵn sàng."
+    if error.code in {"UNAUTHORIZED", "INVALID_REQUEST", "CHANNEL_NOT_LINKED", "NOT_LINKED"}:
+        return "Không thể xác thực yêu cầu trợ lý. Hãy liên kết lại trong SmartPlan."
+    if error.code == "NOT_IMPLEMENTED":
+        return "Tính năng trợ lý này chưa được bật."
+    return "Không xử lý được yêu cầu trợ lý."
 
 
 def normalize_text(text: str) -> str:
@@ -366,26 +420,39 @@ class TelegramPollingBot:
         self.api_base = f"https://api.telegram.org/bot{settings.telegram_bot_token}"
         self.pending_requests: dict[str, ParsedRequest] = {}
         self.pending_overwrites: dict[str, PendingOverwriteConfirmation] = {}
+        self.seen_assistant_messages: set[tuple[str, str]] = set()
+        self.assistant_account_id = str(getattr(settings, "telegram_account_id", "") or "").strip()
+        self.assistant_client = (
+            AssistantClient(settings)
+            if self.assistant_account_id and settings.smartplan_assistant_url and settings.smartplan_assistant_secret
+            else None
+        )
 
     def get_updates(self, offset: int | None) -> list[dict]:
         params: dict[str, int] = {"timeout": 25}
         if offset is not None:
             params["offset"] = offset
-        response = requests.get(f"{self.api_base}/getUpdates", params=params, timeout=35)
-        response.raise_for_status()
+        try:
+            response = requests.get(f"{self.api_base}/getUpdates", params=params, timeout=35)
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            raise RuntimeError("Telegram transport unavailable") from exc
         payload = response.json()
         if not payload.get("ok"):
-            raise RuntimeError(f"Telegram getUpdates failed: {payload}")
+            raise RuntimeError("Telegram getUpdates failed")
         return payload.get("result", [])
 
     def send_message(self, chat_id: str, text: str) -> None:
         for chunk in split_message(text):
-            response = requests.post(
-                f"{self.api_base}/sendMessage",
-                json={"chat_id": chat_id, "text": chunk},
-                timeout=20,
-            )
-            response.raise_for_status()
+            try:
+                response = requests.post(
+                    f"{self.api_base}/sendMessage",
+                    json={"chat_id": chat_id, "text": chunk},
+                    timeout=20,
+                )
+                response.raise_for_status()
+            except requests.RequestException as exc:
+                raise RuntimeError("Telegram transport unavailable") from exc
 
     def resolve_overwrite_confirmation(self, chat_id: str, text: str) -> str | None:
         pending = self.pending_overwrites.get(chat_id)
@@ -429,6 +496,83 @@ class TelegramPollingBot:
         self.send_message(chat_id, build_clarification_message(merged))
         return None
 
+    def _assistant_identity(self, chat_id: str, message: dict) -> AssistantIdentity | None:
+        chat = message.get("chat") or {}
+        sender = message.get("from") or {}
+        if chat.get("type") != "private" or not chat_id.isdigit() or not str(sender.get("id", "")).isdigit() or str(sender.get("id")) != chat_id:
+            return None
+        if not self.assistant_client or not self.assistant_account_id:
+            return None
+        return AssistantIdentity(
+            channel="telegram",
+            channel_account_id=self.assistant_account_id,
+            channel_user_id=chat_id,
+            channel_chat_id=chat_id,
+        )
+
+    @staticmethod
+    def _assistant_request_id(message: dict, chat_id: str, text: str, action: str) -> str:
+        message_id = str((message.get("message_id") or "")).strip()
+        suffix = message_id if message_id.isdigit() else hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+        return f"telegram-{action}-{chat_id}-{suffix}"[:128]
+
+    def _handle_assistant_message(self, message: dict, chat_id: str, text: str) -> bool:
+        if not hasattr(self, "seen_assistant_messages"):
+            self.seen_assistant_messages = set()
+        message_id = str(message.get("message_id", "")).strip()
+        command = parse_assistant_command(text)
+        has_legacy_state = chat_id in self.pending_requests or chat_id in self.pending_overwrites
+        if has_legacy_state and command and command.action == "cancel":
+            return False
+        is_natural_language = command is None and not has_legacy_state and not parse_request(text).action and not parse_request(text).program and not parse_request(text).grade and not parse_request(text).week
+        if command is None and not is_natural_language:
+            return False
+        if command and command.action == "help":
+            self.send_message(chat_id, HELP_TEXT)
+            return True
+        identity = self._assistant_identity(chat_id, message)
+        if identity is None:
+            if command is not None or is_natural_language:
+                self.send_message(chat_id, "Trợ lý chỉ nhận lệnh trong chat riêng đã liên kết và đã cấu hình.")
+                return True
+            return False
+
+        if message_id:
+            key = (chat_id, message_id)
+            if key in self.seen_assistant_messages:
+                return True
+            self.seen_assistant_messages.add(key)
+            if len(self.seen_assistant_messages) > 10000:
+                self.seen_assistant_messages = set(list(self.seen_assistant_messages)[-5000:])
+
+        request_id = self._assistant_request_id(message, chat_id, text, command.action if command else "chat")
+        try:
+            if command and command.action == "unlink":
+                self.send_message(chat_id, "Mở SmartPlan để hủy liên kết trợ lý.")
+                return True
+            if command and command.action == "link":
+                if len(command.args) != 1:
+                    self.send_message(chat_id, "Cú pháp: /link CODE")
+                    return True
+                result = self.assistant_client.send_request("consumeLinkCode", identity, {"code": command.args[0]}, request_id=request_id)
+            elif command and command.action in {"confirm", "cancel"}:
+                if len(command.args) != 2:
+                    self.send_message(chat_id, f"Cú pháp: /{command.action} ID HASH")
+                    return True
+                method = self.assistant_client.confirm if command.action == "confirm" else self.assistant_client.cancel
+                result = method(identity, command.args[0], command.args[1], request_id=request_id)
+            elif command and command.action == "status":
+                if len(command.args) != 1:
+                    self.send_message(chat_id, "Cú pháp: /status JOB_ID")
+                    return True
+                result = self.assistant_client.get_job_status(identity, command.args[0], request_id=request_id)
+            else:
+                result = self.assistant_client.send_request("chat", identity, {"text": text}, request_id=request_id)
+            self.send_message(chat_id, _safe_assistant_result(result))
+        except AssistantClientError as exc:
+            self.send_message(chat_id, _safe_assistant_error(exc))
+        return True
+
     def handle_message(self, message: dict) -> None:
         chat = message.get("chat") or {}
         chat_id = str(chat.get("id", ""))
@@ -440,6 +584,9 @@ class TelegramPollingBot:
             return
 
         try:
+            if self._handle_assistant_message(message, chat_id, text):
+                return
+
             overwrite_result = self.resolve_overwrite_confirmation(chat_id, text)
             if overwrite_result is not None:
                 if overwrite_result:
@@ -464,8 +611,8 @@ class TelegramPollingBot:
                     f"Đã nhận lệnh {action_label} {command.program.upper()} G{command.grade} tuần {command.week:02d}. Tôi đang xử lý...",
                 )
             result = handle_command(command)
-        except Exception as exc:
-            result = f"Có lỗi khi xử lý lệnh: {exc}"
+        except Exception:
+            result = "Có lỗi khi xử lý lệnh. Vui lòng thử lại."
         self.send_message(chat_id, result)
 
     def run(self) -> None:
@@ -477,11 +624,11 @@ class TelegramPollingBot:
                 updates = self.get_updates(offset)
                 for update in updates:
                     offset = update["update_id"] + 1
-                    message = update.get("message") or update.get("edited_message")
+                    message = update.get("message")
                     if message:
                         self.handle_message(message)
             except Exception as exc:
-                print(f"Telegram polling error: {exc}")
+                print(f"Telegram polling error: {type(exc).__name__}")
                 time.sleep(5)
 
 

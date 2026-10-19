@@ -110,6 +110,58 @@ Web (React)
 | `CLAUDE_MODEL` | `claude-sonnet-4-6` | Model name proxy nhận (không dùng shorthand) |
 | `WEB_WORD_RENDER_URL` | `https://<vercel>.vercel.app/api/render-word` | BẮT BUỘC — bot raise lỗi nếu thiếu |
 
+## 6b. SmartPlan Assistant gateway client
+
+`app/assistant_client.py` provides a small server-side client for the SmartPlan Assistant gateway. It does not expose a new HTTP route and does not run a background worker. Each call sends a compact, sorted-key JSON envelope to `SMARTPLAN_ASSISTANT_URL` with `action`, `requestId`, and channel identity (`channel`, `channelAccountId`, `channelUserId`, optional `channelChatId`).
+
+The exact request bytes are signed with HMAC-SHA256 using `SMARTPLAN_ASSISTANT_SECRET`:
+
+```text
+<unix_timestamp>.<nonce>.<raw_json_body>.smartplan-assistant
+```
+
+Headers: `X-Assistant-Timestamp`, `X-Assistant-Nonce`, `X-Assistant-Signature`, and `Content-Type: application/json`. The client supports `prepareConfirmation`, `confirm`, `cancel`, and `jobStatus`; `prepareConfirmation` requires a stable caller-supplied `request_id` so retries remain idempotent. `wait_for_job()` polls until `succeeded`, `failed`, or `cancelled`, otherwise raises `JOB_POLL_TIMEOUT` after the configured poll limit.
+
+Environment variables:
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SMARTPLAN_ASSISTANT_URL` | empty | Gateway URL; client fails closed when absent |
+| `SMARTPLAN_ASSISTANT_SECRET` | empty | Shared HMAC secret; server-side only |
+| `SMARTPLAN_ASSISTANT_TIMEOUT_SECONDS` | `20` | Per-request HTTP timeout; must be positive |
+| `SMARTPLAN_ASSISTANT_POLL_INTERVAL_SECONDS` | `2` | Delay between job status polls; must be positive |
+
+Identity must remain channel-scoped: use the real OA/bot account ID and channel user ID. Do not match users by display name or phone number. Keep `SMARTPLAN_ASSISTANT_SECRET` in Railway or local `.env` only; never store it in browser settings, logs, previews, Telegram text, or committed files. Rotate the gateway and bot secret together.
+
+Contract tests are stdlib-only and make no network calls:
+
+```text
+python -m unittest discover -s tests -p "test_*.py" -v
+```
+
+## 6c. Task 8 channel adapters
+
+`app/main.py` registers `POST /api/zalo/webhook` before starting uvicorn, while the existing Telegram polling loop remains the main thread. `app/zalo_client.py` verifies the exact raw-body `X-ZEVENT-SIGNATURE` with HMAC-SHA256, requires `ZALO_OA_ID` to be present in `ZALO_OA_ALLOWED_IDS`, normalizes the event's OA ID and OA-scoped user ID, and sends reactive replies through Zalo OA OpenAPI. The access token and webhook secret stay server-side; transport errors expose only stable error codes.
+
+`app/zalo_adapter.py` supports `/link CODE`, `/confirm ID HASH`, `/cancel ID HASH`, `/status JOB_ID`, `/help`, plus natural-language `chat` routing. It never sends a startup or proactive notification. A reply is sent only after a valid signed inbound text event with provider event ID and fresh timestamp. `ZaloReplayStore` claims `(OA ID, UID, event ID)` in SQLite before dispatch; duplicate/stale/ambiguous events fail closed. `/link` returns a generic linked confirmation and does not echo account data. Adapter text redacts private URLs, PINs, tokens, and submission markers. An OA ID that is allowlisted but differs from configured `ZALO_OA_ID` is rejected.
+
+Telegram legacy TDS/MOET parsing remains first-class. Assistant commands and natural-language routing run only in private chats with numeric Telegram user ID, configured `TELEGRAM_ACCOUNT_ID`, and Assistant gateway settings. `/unlink` directs the user to the authenticated SmartPlan web flow; no unverified channel unlink is attempted. Group chats never reach the Assistant gateway.
+
+New environment variables:
+
+| Variable | Purpose |
+|----------|---------|
+| `TELEGRAM_ACCOUNT_ID` | Numeric Telegram bot identity sent as `channelAccountId` |
+| `ZALO_OA_ID` | Single configured Zalo Official Account ID |
+| `ZALO_OA_ALLOWED_IDS` | Comma-separated OA allowlist; must include `ZALO_OA_ID` |
+| `ZALO_OA_ACCESS_TOKEN` | Server-only OA OpenAPI access token |
+| `ZALO_OA_WEBHOOK_SECRET` | Server-only webhook HMAC secret |
+| `ZALO_OPENAPI_BASE_URL` | OpenAPI base URL; defaults to `https://openapi.zalo.me` |
+| `ZALO_WEBHOOK_REPLAY_DB` | SQLite path for hashed webhook event claims; default `outputs/zalo_webhook_replay.sqlite3` |
+| `ZALO_WEBHOOK_MAX_AGE_SECONDS` | Webhook timestamp window; default `300` |
+
+Task 8 tests use fake sessions and fake gateway clients only: 22 unittest cases. They cover HMAC/allowlist/UID normalization, durable replay/freshness, safe OpenAPI reply, output redaction, reactive command routing, invalid signatures, OA mismatch, Telegram private-chat routing, duplicate-message suppression, and token-safe transport errors. Edited/duplicate Telegram assistant messages are ignored. Real Zalo/Telegram canary, platform message-window policy, and production webhook delivery remain unverified until credentials and external deployment are intentionally supplied.
+
 ## 7. Lỗi thường gặp
 
 | Lỗi | Nguyên nhân | Xử lý |
